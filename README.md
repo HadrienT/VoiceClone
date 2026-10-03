@@ -114,6 +114,21 @@ L'onglet **Live / Discord** utilise le micro et les sorties audio de la machine 
 3. **Texte → Voix** : choisissez modèle, voix, langue, tapez le texte → *Générer*.
 4. **Voix → Voix** : *Conversion directe* (garde votre intonation) ou *Transcription + TTS* (re-synthèse totale).
 
+### Enregistrer le son du PC (ce que vous entendez au casque)
+
+Dans **Mes voix** (et **Voix → Voix**), le menu de source propose, en plus des micros, **🖥️ Son du PC** : il enregistre
+ce qui sort de l'ordinateur sur lequel la page est ouverte (vidéo YouTube, appel, jeu…). La capture se fait **dans le
+navigateur**, donc ça fonctionne même quand VoiceClone tourne sur un serveur distant.
+
+1. Choisissez **🖥️ Son du PC** puis **● Enregistrer**.
+2. Windows (Chrome ou Edge) : dans la fenêtre de partage, onglet **« Écran entier »**, cochez **« Partager aussi l'audio
+   du système »** puis *Partager*. Pour ne capter qu'un onglet (ex. une vidéo), choisissez l'onglet et cochez
+   « Partager aussi l'audio de l'onglet ».
+3. **■ Arrêter** (ou « Arrêter le partage » dans la barre du navigateur) : l'échantillon est ajouté.
+
+L'image n'est jamais enregistrée. Firefox et Safari ne savent pas capturer le son système. Évitez la musique de fond,
+et ne clonez que des voix pour lesquelles vous avez l'accord de la personne.
+
 ### Conseils pour un bon clone
 
 - 10 à 30 s de parole naturelle, **une seule personne**, sans musique ni écho.

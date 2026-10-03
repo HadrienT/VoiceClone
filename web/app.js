@@ -1,4 +1,4 @@
-import { Recorder, toWav, listMicrophones, fmtTime } from "./audio.js";
+import { Recorder, toWav, listMicrophones, fmtTime, SYSTEM_SOURCE, canCaptureSystemAudio } from "./audio.js";
 
 // ---------------------------------------------------------------- utilitaires
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -270,7 +270,7 @@ let micDevices = [];
 
 function renderPending() {
   $("#pending-list").innerHTML = pending.map((p, i) => `<div class="pending-item">
-      <span>${p.source === "record" ? "🎤" : "📁"}</span>
+      <span>${{ record: "🎤", system: "🖥️" }[p.source] || "📁"}</span>
       <span class="name" title="${esc(p.name)}">${esc(p.name)} · ${p.duration ? p.duration.toFixed(1) + " s" : ""}</span>
       <audio controls src="${p.url}"></audio>
       ${p.transcript ? `<label class="check" style="margin:0;font-size:12px" title="${esc(p.transcript)}"><input type="checkbox" data-read="${i}" ${p.useTranscript ? "checked" : ""}> j'ai lu le texte proposé</label>` : ""}
@@ -335,38 +335,80 @@ function nextPrompt() {
 $("#next-prompt").addEventListener("click", nextPrompt);
 nextPrompt();
 
+const SYSTEM_HINT = `<b>🖥️ Son du PC</b> : enregistre ce que vous entendez dans votre casque (vidéo, Discord, jeu…).
+  À l'étape suivante, le navigateur demande quoi partager : choisissez <b>« Écran entier »</b> puis cochez
+  <b>« Partager aussi l'audio du système »</b> (Windows, Chrome ou Edge). Pour un seul onglet, choisissez l'onglet et
+  cochez « Partager aussi l'audio de l'onglet ». L'image n'est pas enregistrée. Coupez la musique pour un clone propre.`;
+
 async function loadMics() {
   try {
     micDevices = await listMicrophones();
-    fillSelect($("#rec-device"), micDevices.map((d, i) => ({ value: d.deviceId, label: d.label || `Micro ${i + 1}` })), { empty: "Micro par défaut" });
-  } catch { /* permissions non accordées */ }
+  } catch { micDevices = []; /* permissions non accordées */ }
+  const items = micDevices.map((d, i) => ({ value: d.deviceId, label: `🎤 ${d.label || `Micro ${i + 1}`}` }));
+  if (!items.length) items.push({ value: "", label: "🎤 Micro par défaut" });
+  if (canCaptureSystemAudio()) items.push({ value: SYSTEM_SOURCE, label: "🖥️ Son du PC" });
+  $$(".source-select").forEach((sel) => {
+    fillSelect(sel, items, { value: sel.value || store.get(`source.${sel.id}`) });
+    updateSourceHint(sel);
+  });
 }
 
-const mainRecorder = new Recorder({
-  onLevel: (p) => { $("#rec-meter").style.width = `${Math.min(100, p * 140)}%`; },
-  onTick: (t) => { $("#rec-time").textContent = fmtTime(t); },
-});
+function updateSourceHint(sel) {
+  const hint = $(`.system-hint[data-for="${sel.id}"]`);
+  if (!hint) return;
+  hint.innerHTML = SYSTEM_HINT;
+  hint.classList.toggle("hidden", sel.value !== SYSTEM_SOURCE);
+}
 
-$("#rec-btn").addEventListener("click", async () => {
-  const btn = $("#rec-btn");
-  if (!mainRecorder.recording) {
+$$(".source-select").forEach((sel) => sel.addEventListener("change", () => {
+  store.set(`source.${sel.id}`, sel.value);
+  updateSourceHint(sel);
+}));
+
+/** Relie un bouton ● Enregistrer à un sélecteur de source, un vumètre et un chrono. */
+function bindRecorder({ btn, select, meter, time, onResult }) {
+  const finish = async () => {
+    btn.classList.remove("recording");
+    btn.textContent = "● Enregistrer";
+    select.disabled = false;
+    const res = await rec.stop();
+    if (!res) return;
+    if (res.duration < 1) return toast("Enregistrement trop court.", "error");
+    onResult(res, select.value === SYSTEM_SOURCE ? "system" : "record");
+  };
+  const rec = new Recorder({
+    onLevel: (p) => { meter.style.width = `${Math.min(100, p * 140)}%`; },
+    onTick: (t) => { time.textContent = fmtTime(t); },
+    onEnded: finish, // partage arrêté depuis la barre du navigateur
+  });
+  btn.addEventListener("click", async () => {
+    if (rec.recording) return finish();
     try {
-      await mainRecorder.start($("#rec-device").value);
+      await rec.start(select.value);
       btn.classList.add("recording");
       btn.textContent = "■ Arrêter";
-      if (!micDevices.some((d) => d.label)) loadMics(); // libellés disponibles après autorisation
-    } catch (err) { toast(`Micro inaccessible : ${err.message}`, "error"); }
-    return;
-  }
-  btn.classList.remove("recording");
-  btn.textContent = "● Enregistrer";
-  const res = await mainRecorder.stop();
-  if (!res) return;
-  if (res.duration < 1) return toast("Enregistrement trop court.", "error");
-  const n = pending.filter((p) => p.source === "record").length + 1;
-  pending.push({ ...res, name: `Enregistrement ${n}`, source: "record", url: URL.createObjectURL(res.blob), transcript: $("#read-prompt").textContent, useTranscript: true });
-  renderPending();
-  nextPrompt();
+      select.disabled = true;
+      if (select.value !== SYSTEM_SOURCE && !micDevices.some((d) => d.label)) loadMics(); // libellés après autorisation
+    } catch (err) {
+      toast(`${select.value === SYSTEM_SOURCE ? "Capture du son du PC" : "Micro"} impossible : ${err.message}`, "error", 8000);
+    }
+  });
+}
+
+bindRecorder({
+  btn: $("#rec-btn"), select: $("#rec-device"), meter: $("#rec-meter"), time: $("#rec-time"),
+  onResult: (res, source) => {
+    const n = pending.filter((p) => p.source === source).length + 1;
+    const fromMic = source === "record";
+    pending.push({
+      ...res, source, url: URL.createObjectURL(res.blob),
+      name: fromMic ? `Enregistrement ${n}` : `Son du PC ${n}`,
+      // le texte proposé n'a de sens que si c'est vous qui l'avez lu au micro
+      transcript: fromMic ? $("#read-prompt").textContent : "", useTranscript: fromMic,
+    });
+    renderPending();
+    if (fromMic) nextPrompt();
+  },
 });
 
 $("#create-voice").addEventListener("click", (e) => busy(e.currentTarget, "Analyse…", async () => {
@@ -376,13 +418,13 @@ $("#create-voice").addEventListener("click", (e) => busy(e.currentTarget, "Analy
     fd.append("language", $("#nv-lang").value);
     fd.append("consent", $("#nv-consent").checked);
     const [first, ...rest] = pending;
-    fd.append("files", first.blob, first.source === "record" ? "record.wav" : first.name);
+    fd.append("files", first.blob, first.source === "upload" ? first.name : `${first.name}.wav`);
     fd.append("source", first.source);
     if (first.useTranscript) fd.append("transcript", first.transcript);
     let voice = await api("/api/voices", { method: "POST", body: fd });
     for (const p of rest) {
       const f = new FormData();
-      f.append("file", p.blob, p.source === "record" ? "record.wav" : p.name);
+      f.append("file", p.blob, p.source === "upload" ? p.name : `${p.name}.wav`);
       f.append("source", p.source);
       if (p.useTranscript) f.append("transcript", p.transcript);
       voice = await api(`/api/voices/${voice.id}/samples`, { method: "POST", body: f });
@@ -419,7 +461,7 @@ function renderVoices() {
       <details>
         <summary>Échantillons (${v.samples.length}) & transcription</summary>
         <div class="samples">
-          ${v.samples.map((s) => `<div class="sample"><span class="name">${s.source === "record" ? "🎤" : "📁"} ${esc(s.original_name || s.file)} · ${s.duration}s</span>
+          ${v.samples.map((s) => `<div class="sample"><span class="name">${{ record: "🎤", system: "🖥️" }[s.source] || "📁"} ${esc(s.original_name || s.file)} · ${s.duration}s</span>
             <audio controls preload="none" src="/api/voices/${v.id}/audio?sample=${encodeURIComponent(s.file.split("/").pop())}&t=${t}"></audio>
             <button class="btn small danger" data-rm-sample="${esc(s.file.split("/").pop())}">✕</button></div>`).join("")}
           <div class="row" style="margin:6px 0 0">
@@ -478,7 +520,8 @@ $("#voice-list").addEventListener("click", async (e) => {
       }
       cardRecorders.delete(id);
       const res = await rec.stop();
-      if (res && res.duration >= 1) await uploadSample(id, res.blob, "record.wav", "record");
+      const system = $("#rec-device").value === SYSTEM_SOURCE;
+      if (res && res.duration >= 1) await uploadSample(id, res.blob, system ? "son-du-pc.wav" : "record.wav", system ? "system" : "record");
     } else if (btn.hasAttribute("data-save-transcript")) {
       await api(`/api/voices/${id}`, { method: "PATCH", json: { transcript: $("[data-transcript]", card).value } });
       toast("Transcription enregistrée", "ok");
@@ -599,24 +642,9 @@ setupDropzone($("#s2s-drop"), $("#s2s-file"), async ([f]) => {
   try { setS2SSource((await toWav(f)).blob, f.name); } catch { setS2SSource(f, f.name); }
 });
 
-const s2sRecorder = new Recorder({
-  onLevel: (p) => { $("#s2s-meter").style.width = `${Math.min(100, p * 140)}%`; },
-  onTick: (t) => { $("#s2s-time").textContent = fmtTime(t); },
-});
-$("#s2s-rec").addEventListener("click", async () => {
-  const btn = $("#s2s-rec");
-  if (!s2sRecorder.recording) {
-    try {
-      await s2sRecorder.start($("#rec-device").value);
-      btn.classList.add("recording");
-      btn.textContent = "■ Arrêter";
-    } catch (err) { toast(`Micro inaccessible : ${err.message}`, "error"); }
-    return;
-  }
-  btn.classList.remove("recording");
-  btn.textContent = "● Enregistrer";
-  const res = await s2sRecorder.stop();
-  if (res) setS2SSource(res.blob, "enregistrement");
+bindRecorder({
+  btn: $("#s2s-rec"), select: $("#s2s-device"), meter: $("#s2s-meter"), time: $("#s2s-time"),
+  onResult: (res, source) => setS2SSource(res.blob, source === "system" ? "son du PC" : "enregistrement"),
 });
 
 $("#s2s-go").addEventListener("click", (e) => {

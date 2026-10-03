@@ -55,28 +55,76 @@ export async function listMicrophones() {
   return devices.filter((d) => d.kind === "audioinput");
 }
 
-/** Enregistreur micro avec vumètre. */
+/** Valeur spéciale de source : le son de l'ordinateur au lieu d'un micro. */
+export const SYSTEM_SOURCE = "__system__";
+
+/** Capture du son système possible dans ce navigateur ? (Chrome / Edge ; pas Firefox ni Safari) */
+export const canCaptureSystemAudio = () => Boolean(navigator.mediaDevices?.getDisplayMedia) && !/firefox/i.test(navigator.userAgent);
+
+async function openMicrophone(deviceId) {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Le micro n'est accessible que via localhost ou HTTPS (utilisez le tunnel SSH).");
+  }
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      // Audio brut : les traitements du navigateur dégradent le clonage
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: 1,
+    },
+  });
+}
+
+/**
+ * Capture le son qui sort de l'ordinateur (vidéo, Discord, jeu…) via le partage d'écran.
+ * Sous Windows avec Chrome/Edge : choisir « Écran entier » puis cocher « Partager l'audio du système ».
+ * L'image n'est jamais utilisée : la piste vidéo est coupée immédiatement.
+ */
+async function captureSystemAudio() {
+  if (!canCaptureSystemAudio()) {
+    throw new Error("Capture du son du PC impossible dans ce navigateur : utilisez Chrome ou Edge (via localhost / tunnel SSH).");
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true, // obligatoire pour que le navigateur propose l'audio
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false },
+      systemAudio: "include",
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "exclude",
+      monitorTypeSurfaces: "include",
+    });
+  } catch (err) {
+    if (err.name === "NotAllowedError") throw new Error("Partage annulé.");
+    throw err;
+  }
+  stream.getVideoTracks().forEach((t) => t.stop());
+  if (!stream.getAudioTracks().length) {
+    throw new Error("Aucun son partagé : choisissez « Écran entier » et cochez « Partager l'audio du système » (ou un onglet avec « Partager l'audio de l'onglet »).");
+  }
+  return new MediaStream(stream.getAudioTracks());
+}
+
+/** Enregistreur (micro ou son du PC) avec vumètre. */
 export class Recorder {
-  constructor({ onLevel, onTick } = {}) {
+  constructor({ onLevel, onTick, onEnded } = {}) {
     this.onLevel = onLevel || (() => {});
     this.onTick = onTick || (() => {});
+    this.onEnded = onEnded || (() => {});
     this.recording = false;
   }
 
+  /**
+   * Démarre l'enregistrement.
+   * - deviceId : micro à utiliser
+   * - SYSTEM_SOURCE : son de l'ordinateur (ce qui sort dans le casque), capturé via le partage d'écran
+   */
   async start(deviceId) {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Le micro n'est accessible que via localhost ou HTTPS.");
-    }
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        deviceId: deviceId ? { exact: deviceId } : undefined,
-        // Audio brut : les traitements du navigateur dégradent le clonage
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1,
-      },
-    });
+    this.stream = deviceId === SYSTEM_SOURCE ? await captureSystemAudio() : await openMicrophone(deviceId);
+    // L'utilisateur peut couper le partage depuis la barre du navigateur : on arrête proprement
+    this.stream.getAudioTracks()[0].addEventListener("ended", () => this.recording && this.onEnded());
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     const source = this.ctx.createMediaStreamSource(this.stream);
     this.analyser = this.ctx.createAnalyser();

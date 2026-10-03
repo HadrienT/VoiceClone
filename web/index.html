@@ -75,7 +75,7 @@
             </div>
           </div>
           <div>
-            <h3>🎤 Enregistrer en direct</h3>
+            <h3>🎤 Enregistrer en direct <small class="muted">(micro ou son du PC)</small></h3>
             <div class="recorder" id="recorder">
               <div class="prompt-box">
                 <div class="prompt-head">
@@ -86,10 +86,11 @@
               </div>
               <div class="meter"><div id="rec-meter"></div></div>
               <div class="rec-controls">
-                <select id="rec-device" title="Micro"></select>
+                <select id="rec-device" class="source-select" title="Source"></select>
                 <button class="btn rec" id="rec-btn">● Enregistrer</button>
                 <span id="rec-time" class="mono">00:00</span>
               </div>
+              <div class="notice info system-hint hidden" data-for="rec-device"></div>
             </div>
           </div>
         </div>
@@ -162,9 +163,11 @@
           <div class="recorder compact">
             <div class="meter"><div id="s2s-meter"></div></div>
             <div class="rec-controls">
+              <select id="s2s-device" class="source-select" title="Source"></select>
               <button class="btn rec" id="s2s-rec">● Enregistrer</button>
               <span id="s2s-time" class="mono">00:00</span>
             </div>
+            <div class="notice info system-hint hidden" data-for="s2s-device"></div>
           </div>
         </div>
         <div id="s2s-source" class="source hidden"></div>
