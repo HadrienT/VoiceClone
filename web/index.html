@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VoiceClone Studio</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="logo">🎙️</span>
+      <div>
+        <strong>VoiceClone</strong>
+        <small>Studio open source</small>
+      </div>
+    </div>
+    <nav id="nav">
+      <button data-tab="models" class="active"><span>📦</span> Modèles</button>
+      <button data-tab="voices"><span>🧬</span> Mes voix</button>
+      <button data-tab="tts"><span>💬</span> Texte → Voix</button>
+      <button data-tab="s2s"><span>🔁</span> Voix → Voix</button>
+      <button data-tab="live"><span>🔴</span> Live / Discord</button>
+      <button data-tab="history"><span>🕘</span> Historique</button>
+    </nav>
+    <div class="sys" id="sys">…</div>
+  </aside>
+
+  <main>
+    <!-- ============================== MODÈLES ============================== -->
+    <section id="tab-models" class="tab active">
+      <header class="page-head">
+        <h1>Modèles</h1>
+        <p>Choisissez les modèles open source à utiliser. Ils sont téléchargés depuis Hugging Face
+          dans <code id="data-dir">data/models</code> puis chargés en mémoire à la demande.</p>
+      </header>
+      <div class="filters">
+        <button class="chip active" data-filter="all">Tous</button>
+        <button class="chip" data-filter="tts">Texte → Voix</button>
+        <button class="chip" data-filter="vc">Voix → Voix</button>
+        <button class="chip" data-filter="asr">Transcription</button>
+      </div>
+      <div id="model-list" class="grid"></div>
+    </section>
+
+    <!-- ============================== VOIX ============================== -->
+    <section id="tab-voices" class="tab">
+      <header class="page-head">
+        <h1>Mes voix</h1>
+        <p>Créez une empreinte vocale : glissez une piste audio ou enregistrez-vous en direct.
+          10 à 30 secondes de parole claire, sans musique ni bruit, donnent les meilleurs résultats.</p>
+      </header>
+
+      <div class="card">
+        <h2>Nouvelle voix</h2>
+        <div class="row">
+          <label class="field grow">Nom
+            <input id="nv-name" placeholder="Ex. Ma voix, Narrateur…" maxlength="60">
+          </label>
+          <label class="field">Langue
+            <select id="nv-lang"></select>
+          </label>
+        </div>
+
+        <div class="split">
+          <div>
+            <h3>📁 Importer des fichiers</h3>
+            <div id="dropzone" class="dropzone">
+              <div class="dz-icon">⬇️</div>
+              <p><strong>Glissez vos pistes audio ici</strong><br>ou cliquez pour parcourir</p>
+              <small>WAV, MP3, M4A, OGG, FLAC, WEBM… (plusieurs fichiers possibles)</small>
+              <input id="file-input" type="file" accept="audio/*,video/*" multiple hidden>
+            </div>
+          </div>
+          <div>
+            <h3>🎤 Enregistrer en direct</h3>
+            <div class="recorder" id="recorder">
+              <div class="prompt-box">
+                <div class="prompt-head">
+                  <span>Texte à lire (optionnel)</span>
+                  <button class="link" id="next-prompt">Autre texte ↻</button>
+                </div>
+                <p id="read-prompt"></p>
+              </div>
+              <div class="meter"><div id="rec-meter"></div></div>
+              <div class="rec-controls">
+                <select id="rec-device" title="Micro"></select>
+                <button class="btn rec" id="rec-btn">● Enregistrer</button>
+                <span id="rec-time" class="mono">00:00</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="pending-list" class="pending"></div>
+
+        <label class="check">
+          <input type="checkbox" id="nv-consent">
+          Je confirme que cette voix est la mienne ou que j'ai l'autorisation explicite de la personne.
+        </label>
+        <div class="actions">
+          <button class="btn primary" id="create-voice" disabled>Créer la voix</button>
+        </div>
+      </div>
+
+      <div id="voice-list" class="grid"></div>
+    </section>
+
+    <!-- ============================== TTS ============================== -->
+    <section id="tab-tts" class="tab">
+      <header class="page-head">
+        <h1>Texte → Voix</h1>
+        <p>Faites dire n'importe quel texte à une voix clonée.</p>
+      </header>
+      <div class="card">
+        <div class="row">
+          <label class="field grow">Modèle <select id="tts-model"></select></label>
+          <label class="field grow">Voix <select id="tts-voice"></select></label>
+          <label class="field">Langue <select id="tts-lang"></select></label>
+        </div>
+        <div id="tts-model-warning" class="notice warn hidden"></div>
+        <label class="field">Texte
+          <textarea id="tts-text" rows="6" maxlength="5000" placeholder="Bonjour ! Ceci est ma voix clonée avec un modèle open source."></textarea>
+        </label>
+        <div class="counter"><span id="tts-count">0</span> / 5000</div>
+        <details class="advanced">
+          <summary>Réglages avancés</summary>
+          <div id="tts-params" class="params"></div>
+        </details>
+        <div class="actions">
+          <button class="btn primary" id="tts-go">Générer ▶</button>
+        </div>
+        <div id="tts-result" class="result hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============================== S2S ============================== -->
+    <section id="tab-s2s" class="tab">
+      <header class="page-head">
+        <h1>Voix → Voix</h1>
+        <p>Transformez un enregistrement pour qu'il sonne avec une voix clonée.</p>
+      </header>
+      <div class="card">
+        <div class="seg" id="s2s-mode">
+          <button data-mode="vc" class="active">Conversion directe <small>garde intonation & rythme</small></button>
+          <button data-mode="asr_tts">Transcription + TTS <small>re-synthèse complète</small></button>
+        </div>
+        <div class="row">
+          <label class="field grow">Modèle <select id="s2s-model"></select></label>
+          <label class="field grow asr-only hidden">Transcription <select id="s2s-asr"></select></label>
+          <label class="field grow">Voix cible <select id="s2s-voice"></select></label>
+          <label class="field asr-only hidden">Langue <select id="s2s-lang"></select></label>
+        </div>
+        <div id="s2s-model-warning" class="notice warn hidden"></div>
+        <div class="split">
+          <div id="s2s-drop" class="dropzone small">
+            <p><strong>Glissez l'audio source</strong> ou cliquez</p>
+            <input id="s2s-file" type="file" accept="audio/*,video/*" hidden>
+          </div>
+          <div class="recorder compact">
+            <div class="meter"><div id="s2s-meter"></div></div>
+            <div class="rec-controls">
+              <button class="btn rec" id="s2s-rec">● Enregistrer</button>
+              <span id="s2s-time" class="mono">00:00</span>
+            </div>
+          </div>
+        </div>
+        <div id="s2s-source" class="source hidden"></div>
+        <details class="advanced">
+          <summary>Réglages avancés</summary>
+          <div id="s2s-params" class="params"></div>
+        </details>
+        <div class="actions">
+          <button class="btn primary" id="s2s-go" disabled>Convertir ▶</button>
+        </div>
+        <div id="s2s-result" class="result hidden"></div>
+      </div>
+    </section>
+
+    <!-- ============================== LIVE ============================== -->
+    <section id="tab-live" class="tab">
+      <header class="page-head">
+        <h1>Live / Discord</h1>
+        <p>Parlez dans votre micro, la voix clonée sort en direct sur un câble audio virtuel que Discord
+          utilise comme micro. Le traitement tourne sur cette machine.</p>
+      </header>
+
+      <div class="card">
+        <div class="seg" id="live-mode">
+          <button data-mode="vc" class="active">Conversion directe <small>latence ≈ 0,5-1 s</small></button>
+          <button data-mode="asr_tts">Transcription + TTS <small>phrase par phrase</small></button>
+          <button data-mode="passthrough">Test du routage <small>micro brut</small></button>
+        </div>
+        <div class="row">
+          <label class="field grow model-field">Modèle <select id="live-model"></select></label>
+          <label class="field grow asr-only hidden">Transcription <select id="live-asr"></select></label>
+          <label class="field grow model-field">Voix <select id="live-voice"></select></label>
+          <label class="field asr-only hidden">Langue <select id="live-lang"></select></label>
+        </div>
+        <div class="row">
+          <label class="field grow">🎤 Micro (entrée) <select id="live-in"></select></label>
+          <label class="field grow">🔊 Sortie → Discord <select id="live-out"></select></label>
+          <label class="field grow">🎧 Retour casque (optionnel) <select id="live-mon"></select></label>
+          <button class="btn icon" id="live-refresh" title="Rafraîchir les périphériques">↻</button>
+        </div>
+        <div id="live-dev-error" class="notice warn hidden"></div>
+        <details class="advanced">
+          <summary>Réglages avancés</summary>
+          <div class="params">
+            <label class="param vc-only">Taille des morceaux <span><b id="v-chunk">700</b> ms</span>
+              <input type="range" id="live-chunk" min="250" max="2000" step="50" value="700"></label>
+            <label class="param vc-only">Contexte <span><b id="v-ctx">300</b> ms</span>
+              <input type="range" id="live-ctx" min="0" max="1000" step="50" value="300"></label>
+            <label class="param">Seuil de silence <span><b id="v-th">-45</b> dB</span>
+              <input type="range" id="live-th" min="-70" max="-20" step="1" value="-45"></label>
+            <label class="param asr-only hidden">Fin de phrase après <span><b id="v-eos">600</b> ms</span>
+              <input type="range" id="live-eos" min="250" max="2000" step="50" value="600"></label>
+            <label class="param">Gain micro <span><b id="v-ig">1.0</b>×</span>
+              <input type="range" id="live-ig" min="0" max="4" step="0.1" value="1"></label>
+            <label class="param">Gain sortie <span><b id="v-og">1.0</b>×</span>
+              <input type="range" id="live-og" min="0" max="4" step="0.1" value="1"></label>
+            <label class="param vc-only">Ma voix (source, optionnel)
+              <select id="live-src"></select></label>
+          </div>
+          <div id="live-params" class="params"></div>
+        </details>
+
+        <div class="live-panel">
+          <button class="btn big" id="live-toggle">▶ Démarrer</button>
+          <div class="live-stats">
+            <div class="stat"><span>Micro</span><div class="meter"><div id="live-in-meter"></div></div></div>
+            <div class="stat"><span>Sortie</span><div class="meter out"><div id="live-out-meter"></div></div></div>
+            <div class="kv"><span>État</span><b id="live-state">arrêté</b></div>
+            <div class="kv"><span>Calcul / morceau</span><b id="live-proc">–</b></div>
+            <div class="kv"><span>Tampon</span><b id="live-buf">–</b></div>
+            <div class="kv"><span>Morceaux / sautés</span><b id="live-chunks">–</b></div>
+          </div>
+        </div>
+        <div id="live-error" class="notice error hidden"></div>
+        <div id="live-transcripts" class="transcripts hidden"></div>
+      </div>
+
+      <div class="card guide">
+        <h2>🎮 Brancher sur Discord</h2>
+        <ol>
+          <li>Installez un câble audio virtuel :
+            <ul>
+              <li><b>Windows</b> : <a href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">VB-CABLE</a> (gratuit)</li>
+              <li><b>macOS</b> : <a href="https://existential.audio/blackhole/" target="_blank" rel="noopener">BlackHole 2ch</a></li>
+              <li><b>Linux</b> : <code>./scripts/linux_virtual_mic.sh</code> (PulseAudio / PipeWire)</li>
+            </ul>
+          </li>
+          <li>Ici, choisissez votre vrai micro en entrée et le câble en sortie
+            (<i>CABLE Input</i>, <i>BlackHole 2ch</i> ou <i>VoiceClone_Sink</i>). Les câbles détectés sont marqués ★.</li>
+          <li>Dans Discord → Paramètres → Voix et vidéo : périphérique d'entrée = <i>CABLE Output</i> /
+            <i>BlackHole 2ch</i> / <i>VoiceClone_Mic</i>.</li>
+          <li>Dans Discord, désactivez la <b>suppression de bruit (Krisp)</b> et la <b>sensibilité automatique</b>,
+            sinon la voix générée peut être coupée.</li>
+          <li>Commencez par le mode « Test du routage » pour vérifier que Discord vous entend.</li>
+        </ol>
+        <p class="muted">Astuce : OpenVoice V2 est le plus rapide pour le direct. Sur GPU, Chatterbox VC donne
+          un timbre plus fidèle. Le mode « Transcription + TTS » ajoute ~1-2 s mais la voix est 100 % celle du clone.
+          Un bot Discord pour lire du texte est aussi fourni dans <code>discord_bot/</code>.</p>
+      </div>
+    </section>
+
+    <!-- ============================== HISTORIQUE ============================== -->
+    <section id="tab-history" class="tab">
+      <header class="page-head">
+        <h1>Historique</h1>
+        <p>Vos dernières générations.</p>
+      </header>
+      <div id="history-list" class="history"></div>
+    </section>
+  </main>
+</div>
+
+<div id="toasts"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

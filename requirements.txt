@@ -1,0 +1,10 @@
+# Socle (serveur web, audio, téléchargement Hugging Face)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+numpy>=1.24
+scipy>=1.10
+soundfile>=0.12
+huggingface_hub>=0.23
+# Temps réel (micro -> câble virtuel -> Discord). Nécessite PortAudio.
+sounddevice>=0.4.6

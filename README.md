@@ -1,1 +1,209 @@
-# VoiceClone
+# 🎙️ VoiceClone
+
+Studio **local** de clonage de voix basé sur des modèles **open source**, avec une interface web :
+
+- 📦 **Catalogue de modèles** : choisissez un modèle et téléchargez-le depuis Hugging Face en un clic (barre de progression, suppression, chargement/déchargement de la mémoire GPU).
+- 🧬 **Création de voix** : glissez-déposez une ou plusieurs pistes audio **ou enregistrez-vous en direct** depuis le navigateur (texte à lire proposé, vumètre, analyse de qualité). Le bouton « Entraîner » pré-calcule l'empreinte vocale pour un modèle.
+- 💬 **Texte → Voix (TTS)** dans la voix clonée.
+- 🔁 **Voix → Voix (S2S)** : conversion d'un fichier ou d'un enregistrement.
+- 🔴 **Live / Discord** : votre micro est converti en temps réel et envoyé vers un câble audio virtuel que Discord utilise comme micro.
+- 🤖 **Bot Discord** optionnel (`/say`) pour faire parler une voix clonée dans un salon.
+- 🕘 Historique des générations.
+
+> ⚠️ Ne clonez que votre propre voix ou celle d'une personne qui vous a donné son accord explicite. Usurper l'identité de quelqu'un est illégal dans la plupart des pays.
+
+---
+
+## Modèles supportés
+
+| Modèle | Usage | Français | Live | Licence | Taille |
+|---|---|---|---|---|---|
+| **Coqui XTTS v2** | TTS | ✅ | ✅ (streaming) | CPML (non commercial) | 1,9 Go |
+| **Chatterbox Multilingual** | TTS | ✅ | – | MIT | 3,2 Go |
+| **Chatterbox (EN) + VC** | TTS anglais + conversion de voix | VC : ✅ | ✅ | MIT | 3,0 Go |
+| **OpenVoice V2** | Conversion de voix (très rapide) | ✅ | ✅ | MIT | 130 Mo |
+| **F5-TTS v1** | TTS | ❌ (EN/ZH) | – | CC-BY-NC | 1,4 Go |
+| **Whisper small / large-v3-turbo** | Transcription | ✅ | ✅ | MIT | 0,5 / 1,6 Go |
+
+Tous sont **zero-shot** : 10 à 30 s de voix suffisent, pas besoin d'un long entraînement GPU. L'« entraînement » dans l'interface calcule et met en cache l'empreinte vocale (latents XTTS, conditionnements Chatterbox, embedding OpenVoice) pour des générations plus rapides.
+
+Ajouter un modèle = une entrée dans `voiceclone/registry.py` + une classe dans `voiceclone/engines/`.
+
+---
+
+## Installation
+
+Prérequis : **Python 3.10 – 3.11**, `ffmpeg` (recommandé), et de préférence une **carte NVIDIA** (CUDA). Le CPU fonctionne mais le live sera lent.
+
+```bash
+git clone https://github.com/HadrienT/VoiceClone.git
+cd VoiceClone
+python -m venv .venv
+# Windows : .venv\Scripts\activate    Linux/macOS : source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 1. PyTorch (avec CUDA)
+
+Installez PyTorch adapté à votre GPU depuis <https://pytorch.org/get-started/locally/>, par exemple :
+
+```bash
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+
+### 2. Les moteurs que vous voulez utiliser
+
+Chaque modèle a ses propres dépendances ; l'interface affiche la commande à lancer si elles manquent.
+
+```bash
+pip install coqui-tts                 # XTTS v2  (recommandé pour le français)
+pip install faster-whisper            # Whisper  (mode « transcription + TTS », transcription auto)
+pip install git+https://github.com/myshell-ai/OpenVoice.git   # OpenVoice V2 (live rapide)
+pip install chatterbox-tts            # Chatterbox (TTS multilingue + VC)
+pip install f5-tts                    # F5-TTS
+```
+
+> 💡 Ces paquets épinglent parfois des versions différentes de `torch`/`transformers`. Si vous rencontrez un conflit, créez un environnement virtuel par moteur (ou commencez par **XTTS + Whisper + OpenVoice**, combo qui couvre TTS, S2S et live en français). Après une installation pip, **relancez le serveur**.
+
+### 3. Audio temps réel
+
+`sounddevice` nécessite PortAudio : inclus sous Windows/macOS, sous Linux : `sudo apt install libportaudio2`.
+
+---
+
+## Lancement
+
+```bash
+python -m voiceclone            # ouvre http://localhost:7860
+# ou : ./run.sh   /   run.bat   (crée le venv au premier lancement)
+```
+
+Options : `--host 0.0.0.0` (accès depuis le réseau local), `--port 7860`, `--no-browser`.
+
+Variables d'environnement :
+
+| Variable | Rôle | Défaut |
+|---|---|---|
+| `VOICECLONE_DATA` | dossier des modèles, voix et générations | `./data` |
+| `VOICECLONE_DEVICE` | `auto`, `cuda`, `cuda:1`, `mps`, `cpu` | `auto` |
+| `HF_TOKEN` | jeton Hugging Face (dépôts privés / quotas) | – |
+| `VOICECLONE_MAX_REF_SECONDS` | durée max de la référence vocale | `30` |
+
+> L'enregistrement micro dans le navigateur n'est autorisé que sur `localhost` ou en HTTPS.
+
+---
+
+## Utilisation
+
+1. **Modèles** → *Télécharger* (ex. XTTS v2 et OpenVoice V2). Optionnel : *Charger en mémoire* pour éviter l'attente à la première génération.
+2. **Mes voix** → donnez un nom, glissez vos fichiers ou cliquez **● Enregistrer** et lisez le texte proposé (2-3 prises de 10 s). Cochez le consentement → *Créer la voix*. Vérifiez les avertissements qualité (bruit, saturation…), puis *🧬 Entraîner* pour le modèle choisi.
+3. **Texte → Voix** : choisissez modèle, voix, langue, tapez le texte → *Générer*.
+4. **Voix → Voix** : *Conversion directe* (garde votre intonation) ou *Transcription + TTS* (re-synthèse totale).
+
+### Conseils pour un bon clone
+
+- 10 à 30 s de parole naturelle, **une seule personne**, sans musique ni écho.
+- Micro proche, gain sans saturation, pièce calme.
+- Variez les intonations (questions, exclamations).
+- Pour F5-TTS, renseignez la transcription exacte (ou bouton *Transcrire avec Whisper*).
+
+---
+
+## 🎮 Utiliser la voix clonée en direct sur Discord
+
+Le principe : VoiceClone lit votre **vrai micro**, convertit la voix, et joue le résultat dans un **câble audio virtuel**. Discord écoute ce câble comme s'il s'agissait d'un micro.
+
+```
+Votre micro ──► VoiceClone (modèle) ──► câble virtuel ──► Discord (entrée)
+                         └──► casque (retour optionnel)
+```
+
+1. Installez un câble virtuel :
+   - **Windows** : [VB-CABLE](https://vb-audio.com/Cable/) → sortie *CABLE Input*, Discord entrée *CABLE Output*.
+   - **macOS** : [BlackHole 2ch](https://existential.audio/blackhole/) → sortie et entrée *BlackHole 2ch*.
+   - **Linux** : `./scripts/linux_virtual_mic.sh` → sortie *VoiceClone_Sink*, Discord entrée *VoiceClone_Mic*
+     (avec PortAudio/ALSA, choisissez la sortie `pulse` puis redirigez le flux vers *VoiceClone_Sink* dans `pavucontrol`).
+2. Onglet **Live / Discord** : micro en entrée, câble en sortie (marqué ★), casque en retour si vous voulez vous entendre.
+3. Testez d'abord le mode **Test du routage** (micro brut) pour vérifier que Discord vous entend.
+4. Dans Discord : désactivez **Krisp / suppression de bruit** et la **sensibilité automatique** (ou baissez le seuil).
+
+### Modes live
+
+| Mode | Fonctionnement | Latence typique (GPU) | Modèles |
+|---|---|---|---|
+| **Conversion directe** | Votre voix découpée en morceaux (≈ 0,7 s) avec contexte et fondu enchaîné | 0,5 – 1 s | OpenVoice V2, Chatterbox VC |
+| **Transcription + TTS** | Détection de fin de phrase → Whisper → TTS en streaming | 1 – 2 s après la fin de phrase | Whisper + XTTS (streaming), Chatterbox… |
+
+Réglages : taille des morceaux (plus petit = moins de latence mais plus d'artefacts), contexte, seuil de silence (le silence n'est pas envoyé au modèle), gains. Si « morceaux sautés » augmente, le GPU ne suit pas : augmentez la taille des morceaux ou prenez OpenVoice.
+
+### Bot Discord (texte → voix dans un salon)
+
+```bash
+pip install -r discord_bot/requirements.txt
+cp discord_bot/.env.example discord_bot/.env   # renseignez DISCORD_TOKEN
+python discord_bot/bot.py
+```
+
+Créez l'application sur <https://discord.com/developers/applications>, invitez le bot avec les scopes `bot` + `applications.commands` et les permissions *Connect* / *Speak*. Commandes : `/join`, `/say texte [voice] [model] [language]`, `/voices`, `/stop`, `/leave`. Nécessite `ffmpeg`.
+
+---
+
+## API
+
+L'interface s'appuie sur une API REST documentée automatiquement sur <http://localhost:7860/docs>. Principaux points d'entrée :
+
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/api/models` | catalogue + état (téléchargé, dépendances, chargé, progression) |
+| POST | `/api/models/{id}/download` · `/load` · `/unload` | gestion des modèles |
+| GET/POST | `/api/voices` | liste / création (multipart : `name`, `files[]`, `consent=true`) |
+| POST | `/api/voices/{id}/samples` · `/prepare` · `/transcribe` | échantillons, entraînement, transcription |
+| POST | `/api/tts` | `{model_id, voice_id, text, language, params}` → WAV |
+| POST | `/api/vc` | multipart `file`, `model_id`, `voice_id`, `mode` → WAV |
+| GET/POST | `/api/realtime/devices` · `/start` · `/stop` · `/status` | live |
+
+Exemple :
+
+```bash
+curl -X POST localhost:7860/api/tts -H 'Content-Type: application/json' \
+  -d '{"model_id":"xtts-v2","voice_id":"ma-voix-1a2b3c","text":"Salut tout le monde !","language":"fr"}' \
+  -o sortie.wav
+```
+
+---
+
+## Structure
+
+```
+voiceclone/
+  server.py      API FastAPI + service de l'interface web
+  registry.py    catalogue des modèles (dépôts HF, dépendances, paramètres)
+  downloads.py   téléchargements Hugging Face en arrière-plan
+  manager.py     chargement/déchargement des moteurs, verrou GPU
+  voices.py      profils de voix (nettoyage audio, référence, cache)
+  realtime.py    moteur live (micro → modèle → câble virtuel)
+  audio.py       utilitaires audio (décodage, rééchantillonnage, analyse)
+  engines/       XTTS, Chatterbox, OpenVoice, F5-TTS, Whisper
+web/             interface (HTML/CSS/JS, sans build)
+discord_bot/     bot Discord optionnel
+scripts/         micro virtuel Linux
+tests/           tests (moteur factice, pas de téléchargement)
+```
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Les tests utilisent un moteur factice : ils vérifient l'API, la gestion des voix, les téléchargements (simulés) et les boucles temps réel sans GPU ni modèle.
+
+## Dépannage
+
+- **« Dépendances manquantes »** : lancez la commande `pip install` affichée, puis redémarrez le serveur.
+- **CUDA out of memory** : déchargez les modèles inutilisés (onglet Modèles) ; XTTS ≈ 3 Go VRAM, Chatterbox ≈ 5-6 Go, OpenVoice < 1 Go.
+- **« Audio temps réel indisponible »** : installez PortAudio (`libportaudio2`).
+- **Discord coupe la voix** : désactivez Krisp et la sensibilité automatique.
+- **Voix robotique en live** : augmentez la taille des morceaux et le contexte, vérifiez que le seuil de silence ne coupe pas vos fins de phrases.
+- **Fichier refusé** : installez `ffmpeg` pour les formats exotiques.
