@@ -71,7 +71,7 @@ MODELS: tuple[ModelSpec, ...] = (
         repos=(HFRepo("coqui/XTTS-v2", allow_patterns=("config.json", "model.pth", "vocab.json",
                                                        "speakers_xtts.pth", "dvae.pth", "mel_stats.pth")),),
         packages=("TTS", "torch"),
-        pip="pip install coqui-tts",
+        pip="pip install coqui-tts 'transformers<5'",
         languages=XTTS_LANGS,
         license="Coqui Public Model License (non commercial)",
         size_hint="≈ 1.9 Go",

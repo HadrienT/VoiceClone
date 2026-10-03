@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import audio
+from ..device import cuda_index
 from .base import Engine
 
 
@@ -16,6 +17,7 @@ class WhisperEngine(Engine):
         self.model = WhisperModel(
             str(self.model_dir),
             device="cuda" if cuda else "cpu",
+            device_index=cuda_index(self.device) if cuda else 0,
             compute_type="float16" if cuda else "int8",
         )
 

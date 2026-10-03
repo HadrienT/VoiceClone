@@ -43,6 +43,8 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+> Si votre `python3` système est plus récent (3.12+) ou sans module `venv` (Debian), utilisez [uv](https://docs.astral.sh/uv/) : `uv venv --python 3.11 .venv` puis `uv pip install -r requirements.txt` (et `uv pip install …` à la place de `pip install …` ci-dessous). `./run.sh` le fait automatiquement si `uv` est installé.
+
 ### 1. PyTorch (avec CUDA)
 
 Installez PyTorch adapté à votre GPU depuis <https://pytorch.org/get-started/locally/>, par exemple :
@@ -56,7 +58,7 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 Chaque modèle a ses propres dépendances ; l'interface affiche la commande à lancer si elles manquent.
 
 ```bash
-pip install coqui-tts                 # XTTS v2  (recommandé pour le français)
+pip install coqui-tts 'transformers<5'   # XTTS v2  (recommandé pour le français)
 pip install faster-whisper            # Whisper  (mode « transcription + TTS », transcription auto)
 pip install git+https://github.com/myshell-ai/OpenVoice.git   # OpenVoice V2 (live rapide)
 pip install chatterbox-tts            # Chatterbox (TTS multilingue + VC)
@@ -90,6 +92,18 @@ Variables d'environnement :
 | `VOICECLONE_MAX_REF_SECONDS` | durée max de la référence vocale | `30` |
 
 > L'enregistrement micro dans le navigateur n'est autorisé que sur `localhost` ou en HTTPS.
+
+Avec plusieurs GPU, `auto` choisit celui qui a le plus de mémoire libre au démarrage.
+
+### Sur un serveur distant (SSH)
+
+Le navigateur n'est pas ouvert automatiquement sans affichage. Depuis votre poste, ouvrez un tunnel puis allez sur <http://localhost:7860> (le micro du navigateur fonctionne ainsi, contrairement à un accès par l'adresse IP) :
+
+```bash
+ssh -L 7860:localhost:7860 utilisateur@serveur
+```
+
+L'onglet **Live / Discord** utilise le micro et les sorties audio de la machine qui exécute VoiceClone : il n'a de sens que sur votre poste, pas sur un serveur sans carte son.
 
 ---
 

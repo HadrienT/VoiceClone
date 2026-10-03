@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import sys
 import webbrowser
 
 
@@ -21,7 +23,9 @@ def main() -> None:
 
     url = f"http://{'localhost' if args.host in ('0.0.0.0', '127.0.0.1') else args.host}:{args.port}"
     print(f"\n  VoiceClone est prêt : {url}\n")
-    if not args.no_browser:
+    # Sans affichage (serveur, session SSH), webbrowser lancerait un navigateur texte dans le terminal
+    headless = sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if not args.no_browser and not headless:
         webbrowser.open(url)
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
 
