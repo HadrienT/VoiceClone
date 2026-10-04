@@ -129,6 +129,25 @@ navigateur**, donc ça fonctionne même quand VoiceClone tourne sur un serveur d
 L'image n'est jamais enregistrée. Firefox et Safari ne savent pas capturer le son système. Évitez la musique de fond,
 et ne clonez que des voix pour lesquelles vous avez l'accord de la personne.
 
+### ✨ Import intelligent (recommandé)
+
+Activé par défaut dans **Mes voix** (et via le bouton ✨ de chaque voix) : déposez un enregistrement brut,
+VoiceClone s'occupe du reste.
+
+1. **Nettoyage** : coupe des basses inutiles, réduction du bruit de fond stationnaire (souffle, ventilateur)
+   seulement si nécessaire, volume égalisé.
+2. **Découpe** en phrases naturelles (pauses ≥ 250 ms), morceaux de 3 à 11 s.
+3. **Notation** de chaque morceau : rapport voix/bruit mesuré *dans* la phrase, part de parole, saturation, durée.
+4. **Sélection** des meilleurs jusqu'à la durée choisie (30 s par défaut), le meilleur en premier
+   (c'est lui que Chatterbox utilise). Les passages trop bruités, saturés ou sans parole sont écartés.
+5. **Transcription** des passages gardés si un Whisper est téléchargé (utile pour F5-TTS).
+
+Un rapport indique pour chaque passage s'il a été gardé et pourquoi. En ligne de commande :
+`python scripts/add_samples.py "Ma voix" mon_audio.wav --auto [--target 30] [--no-denoise]`.
+
+Limites : le débruitage vise les bruits constants ; il ne retire ni la musique ni une autre voix
+(ces passages sont en revanche souvent écartés par la notation).
+
 ### Conseils pour un bon clone
 
 - 10 à 30 s de parole naturelle, **une seule personne**, sans musique ni écho.

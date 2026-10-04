@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import quote
 
 import numpy as np
@@ -233,6 +234,46 @@ def create_app() -> FastAPI:
         data = await read_upload(file)
         return voices.add_sample(voice_id, data, source=source, original_name=file.filename or "",
                                  transcript=transcript).to_dict()
+
+    @app.post("/api/voices/{voice_id}/auto-import")
+    async def auto_import(
+        voice_id: str,
+        file: UploadFile = File(...),
+        source: str = Form("upload"),
+        enhance: bool = Form(True),
+        target_seconds: float = Form(30.0),
+        replace: bool = Form(False),
+        transcribe_model_id: str = Form(""),
+    ):
+        """Import intelligent : nettoie l'enregistrement, le découpe, ne garde que les meilleurs passages
+        (le meilleur en premier) et, si un modèle Whisper est indiqué, les transcrit."""
+        from starlette.concurrency import run_in_threadpool
+
+        from .prep import auto_prepare
+
+        data = await read_upload(file)
+        name = Path(file.filename or "enregistrement").stem
+
+        def work():
+            voices.get(voice_id)
+            x, sr = audio.load_audio(data)
+            pieces, report = auto_prepare(x, sr, enhance=enhance, target_s=max(5.0, min(target_seconds, 120.0)))
+            if replace:
+                for smp in list(voices.get(voice_id).samples):
+                    voices.remove_sample(voice_id, smp.file)
+            texts = {}
+            asr = manager.get(transcribe_model_id, "asr") if transcribe_model_id else None
+            for rank, piece in enumerate(pieces, 1):
+                voice = voices.add_sample(voice_id, audio.to_wav_bytes(piece, sr), source=source,
+                                          original_name=f"{name} · meilleur n°{rank}")
+                if asr is not None:
+                    with manager.infer_lock:
+                        texts[voice.samples[-1].file] = asr.transcribe(piece, sr, voice.language)
+            voice = voices.set_transcripts(voice_id, texts) if texts else voices.get(voice_id)
+            return voice, report
+
+        voice, report = await run_in_threadpool(work)
+        return {"voice": voice.to_dict(), "report": report}
 
     @app.delete("/api/voices/{voice_id}/samples/{name}")
     def delete_sample(voice_id: str, name: str):

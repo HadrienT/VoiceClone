@@ -8,6 +8,7 @@ Exemples (depuis la racine du dépôt) :
     .venv/bin/python scripts/add_samples.py --list
     .venv/bin/python scripts/add_samples.py "Ma voix" mon_audio_morceaux/*.wav
     .venv/bin/python scripts/add_samples.py "Ma voix" mon_audio.wav --split          # découpe à la volée
+    .venv/bin/python scripts/add_samples.py "Ma voix" mon_audio.wav --auto           # nettoie + garde le meilleur
     .venv/bin/python scripts/add_samples.py --create "Nouvelle voix" --lang fr --consent mon_audio.wav --split
 
 Si le serveur a été lancé avec VOICECLONE_DATA, définissez la même variable pour ce script.
@@ -20,10 +21,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from split_audio import split  # noqa: E402
-
 from voiceclone import audio, config  # noqa: E402
+from voiceclone.prep import auto_prepare, split  # noqa: E402
 from voiceclone.voices import VoiceStore  # noqa: E402
 
 
@@ -32,6 +31,16 @@ def find_voice(store: VoiceStore, key: str):
         if key in (v.id, v.name) or key.lower() == v.name.lower():
             return v
     return None
+
+
+def print_report(f: Path, report: dict) -> None:
+    print(f"{f.name} : {report['duration']} s, bruit de fond {report['noise_floor_db_before']} dB"
+          + (f" → {report['noise_floor_db_after']} dB (débruité)" if report["denoised"] else ""))
+    for s in report["segments"]:
+        mark = "✓" if s["kept"] else "✗"
+        print(f"  {mark} {s['start']:6.1f}-{s['end']:6.1f} s  score {s['score']:5.1f}  "
+              f"voix/bruit {s['snr_db']:4.1f} dB  {'' if s['kept'] else s['reason']}")
+    print(f"  → {report['kept_duration']} s gardées")
 
 
 def main() -> None:
@@ -44,6 +53,10 @@ def main() -> None:
     p.add_argument("--consent", action="store_true",
                    help="avec --create : je confirme que c'est ma voix ou que j'ai l'accord de la personne")
     p.add_argument("--split", action="store_true", help="découper chaque fichier aux silences (morceaux ≤ --max s)")
+    p.add_argument("--auto", action="store_true",
+                   help="préparation automatique : nettoyage, découpe, ne garde que les meilleurs passages")
+    p.add_argument("--target", type=float, default=30.0, help="avec --auto : secondes de voix à garder (défaut 30)")
+    p.add_argument("--no-denoise", action="store_true", help="avec --auto : ne pas débruiter")
     p.add_argument("--max", type=float, default=11.0, help="avec --split : durée max d'un morceau (défaut 11)")
     p.add_argument("--min", type=float, default=4.0, help="avec --split : durée min d'un morceau (défaut 4)")
     args = p.parse_args()
@@ -76,7 +89,11 @@ def main() -> None:
     for f in files:
         try:
             x, sr = audio.load_audio(f)
-            pieces = split(x, sr, args.min, args.max) if args.split else [x]
+            if args.auto:
+                pieces, report = auto_prepare(x, sr, enhance=not args.no_denoise, target_s=args.target)
+                print_report(f, report)
+            else:
+                pieces = split(x, sr, args.min, args.max) if args.split else [x]
             for i, piece in enumerate(pieces, 1):
                 name = f"{f.stem}_{i:02d}.wav" if len(pieces) > 1 else f.name
                 voice = store.add_sample(voice.id, audio.to_wav_bytes(piece, sr), source="upload", original_name=name)

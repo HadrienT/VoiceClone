@@ -19,21 +19,30 @@ export const isVirtualDevice = (label) => VIRTUAL_HINTS.some((h) => label.toLowe
 /** Le navigateur sait-il choisir la sortie audio (setSinkId) ? Chrome/Edge oui, Firefox récent oui. */
 export const canChooseOutput = () => typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 
-/** Liste les entrées / sorties audio du PC. Demande l'accès au micro si les noms sont masqués. */
+/** État de l'autorisation micro : "granted", "prompt", "denied" ou "unknown". */
+export async function micPermission() {
+  try {
+    return (await navigator.permissions.query({ name: "microphone" })).state;
+  } catch {
+    return "unknown"; // navigateur sans l'API Permissions pour le micro
+  }
+}
+
+/** Demande l'accès au micro (à appeler depuis un clic : Chrome affiche alors sa fenêtre à coup sûr). */
+export async function requestMic() {
+  const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+  s.getTracks().forEach((t) => t.stop());
+}
+
+/** Liste les entrées / sorties audio du PC (noms visibles seulement une fois le micro autorisé). */
 export async function listBrowserDevices() {
-  if (!navigator.mediaDevices?.enumerateDevices) {
-    throw new Error("Périphériques audio inaccessibles : ouvrez la page via localhost (tunnel SSH) ou HTTPS.");
+  if (!window.isSecureContext || !navigator.mediaDevices?.enumerateDevices) {
+    throw new Error("NOT_SECURE");
   }
-  let devices = await navigator.mediaDevices.enumerateDevices();
-  if (!devices.some((d) => d.label)) {
-    // Les noms ne sont visibles qu'après autorisation du micro
-    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-    s.getTracks().forEach((t) => t.stop());
-    devices = await navigator.mediaDevices.enumerateDevices();
-  }
-  const pick = (kind) => devices.filter((d) => d.kind === kind && d.deviceId !== "communications")
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const pick = (kind) => devices.filter((d) => d.kind === kind && d.deviceId && d.deviceId !== "communications")
     .map((d, i) => ({ id: d.deviceId, label: d.label || `${kind} ${i + 1}`, virtual: isVirtualDevice(d.label) }));
-  return { inputs: pick("audioinput"), outputs: pick("audiooutput") };
+  return { inputs: pick("audioinput"), outputs: pick("audiooutput"), labeled: devices.some((d) => d.label) };
 }
 
 export class BrowserLive {

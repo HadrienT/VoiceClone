@@ -17,47 +17,10 @@ import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from voiceclone import audio  # noqa: E402
 
-FRAME_MS = 20.0
-
-
-def find_cuts(x: np.ndarray, sr: int, min_s: float, max_s: float) -> list[int]:
-    """Positions de coupe (en échantillons) : le passage le plus calme entre min_s et max_s après la coupe précédente."""
-    levels = audio.frame_rms_db(x, sr, FRAME_MS)
-    # lissage sur ~100 ms pour viser de vraies pauses plutôt qu'un creux isolé
-    levels = np.convolve(levels, np.ones(5) / 5, mode="same")
-    hop = int(sr * FRAME_MS / 1000)
-    n_frames = len(levels)
-    min_f, max_f = int(min_s * 1000 / FRAME_MS), int(max_s * 1000 / FRAME_MS)
-    cuts, start = [], 0
-    while n_frames - start > max_f:
-        # la coupe doit laisser au moins min_s derrière elle (pas de minuscule dernier morceau)
-        window = levels[start + min_f:min(start + max_f, n_frames - min_f)]
-        if len(window) == 0:
-            break
-        cut = start + min_f + int(np.argmin(window))
-        cuts.append(cut * hop + hop // 2)
-        start = cut
-    return cuts
-
-
-def split(x: np.ndarray, sr: int, min_s: float = 4.0, max_s: float = 11.0) -> list[np.ndarray]:
-    """Découpe un signal en morceaux de min_s à max_s secondes, coupés aux silences, avec fondus."""
-    bounds = [0, *find_cuts(x, sr, min_s, max_s), len(x)]
-    fade = int(sr * 0.01)
-    ramp = np.linspace(0, 1, fade, dtype=np.float32)
-    parts = []
-    for a, b in zip(bounds[:-1], bounds[1:]):
-        part = x[a:b].copy()
-        if len(part) > 2 * fade:  # petits fondus pour éviter les clics aux coupures
-            part[:fade] *= ramp
-            part[-fade:] *= ramp[::-1]
-        parts.append(part)
-    return parts
+from voiceclone.prep import split  # noqa: E402
 
 
 def main() -> None:
