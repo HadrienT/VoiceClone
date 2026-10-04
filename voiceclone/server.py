@@ -43,6 +43,10 @@ class VoiceUpdate(BaseModel):
     transcript: str | None = None
 
 
+class TranscriptsUpdate(BaseModel):
+    texts: dict[str, str]  # nom du fichier d'échantillon (ex. "001.wav") -> texte prononcé
+
+
 class PrepareRequest(BaseModel):
     model_id: str
 
@@ -107,6 +111,12 @@ def create_app() -> FastAPI:
     @app.exception_handler(audio.AudioError)
     async def _audio(_: Request, exc: audio.AudioError):
         return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    @app.exception_handler(Exception)
+    async def _unexpected(_: Request, exc: Exception):
+        # Message réel renvoyé à l'interface (au lieu d'un « 500 Internal Server Error » opaque)
+        log.exception("Erreur inattendue")
+        return JSONResponse({"detail": f"Erreur interne ({type(exc).__name__}) : {exc}"}, status_code=500)
 
     @app.exception_handler(RealtimeUnavailable)
     async def _rt(_: Request, exc: RealtimeUnavailable):
@@ -210,6 +220,11 @@ def create_app() -> FastAPI:
     @app.delete("/api/voices/{voice_id}/samples/{name}")
     def delete_sample(voice_id: str, name: str):
         return voices.remove_sample(voice_id, f"samples/{name}").to_dict()
+
+    @app.put("/api/voices/{voice_id}/transcripts")
+    def update_transcripts(voice_id: str, body: TranscriptsUpdate):
+        """Texte prononcé dans chaque échantillon (saisi à la main ou corrigé après Whisper)."""
+        return voices.set_transcripts(voice_id, {f"samples/{k}": v for k, v in body.texts.items()}).to_dict()
 
     @app.get("/api/voices/{voice_id}/audio")
     def voice_audio(voice_id: str, sample: str | None = None):

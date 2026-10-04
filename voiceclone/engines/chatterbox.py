@@ -9,6 +9,46 @@ from ..voices import Voice
 from .base import Engine, EngineError, split_text, to_numpy
 
 
+def ensure_perth() -> None:
+    """Rend disponible le filigraneur Perth utilisé par Chatterbox.
+
+    `resemble-perth` importe `pkg_resources` (fourni par setuptools < 81). Dans un venv créé par uv,
+    ou avec un setuptools récent, ce module n'existe pas : l'import échoue en silence et
+    `perth.PerthImplicitWatermarker` vaut None ("'NoneType' object is not callable").
+    On fournit alors l'unique fonction utilisée, `resource_filename`, avant de (re)charger perth.
+    """
+    import importlib
+    import sys
+    import types
+
+    try:
+        import pkg_resources  # noqa: F401
+    except ImportError:
+        import importlib.util
+        import os
+
+        def resource_filename(package: str, resource: str) -> str:
+            # Appelée pendant l'import du paquet lui-même : on localise son dossier sans l'exécuter
+            mod = sys.modules.get(package)
+            origin = getattr(mod, "__file__", None) or importlib.util.find_spec(package).origin
+            return os.path.join(os.path.dirname(origin), resource)
+
+        shim = types.ModuleType("pkg_resources")
+        shim.resource_filename = resource_filename
+        sys.modules["pkg_resources"] = shim
+
+    import perth
+
+    if perth.PerthImplicitWatermarker is None:
+        perth = importlib.reload(perth)
+    if perth.PerthImplicitWatermarker is None:
+        try:  # remonte la vraie erreur d'import pour un message utile
+            from perth.perth_net.perth_net_implicit.perth_watermarker import PerthImplicitWatermarker  # noqa: F401
+        except Exception as exc:
+            raise EngineError(f"Le filigraneur Perth de Chatterbox ne se charge pas : {exc}. "
+                              "Essayez : pip install -U resemble-perth 'setuptools<81'") from exc
+
+
 class _ChatterboxTTSBase(Engine):
     """Logique commune : cache des conditionnements par voix + découpage du texte."""
 
@@ -17,6 +57,7 @@ class _ChatterboxTTSBase(Engine):
     def _load_tts(self):
         import importlib
 
+        ensure_perth()
         module, cls = self.model_cls_path
         model_cls = getattr(importlib.import_module(module), cls)
         self.model = model_cls.from_local(self.model_dir, self.device)
@@ -101,6 +142,7 @@ class ChatterboxEngine(_ChatterboxTTSBase):
 
     def _ensure_vc(self) -> None:
         if self.vc is None:
+            ensure_perth()
             from chatterbox.vc import ChatterboxVC
 
             self.vc = ChatterboxVC.from_local(self.model_dir, self.device)

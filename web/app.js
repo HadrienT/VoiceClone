@@ -458,22 +458,28 @@ function renderVoices() {
       ${v.samples.length ? `<audio controls preload="none" src="/api/voices/${v.id}/audio?t=${t}"></audio>` : '<p class="muted">Aucun échantillon.</p>'}
       ${a.warnings?.length ? `<ul class="warnings">${a.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : v.samples.length ? '<p class="muted" style="margin:0;font-size:13px">✓ Qualité audio correcte</p>' : ""}
       <div class="badges">${prepared}</div>
-      <details>
-        <summary>Échantillons (${v.samples.length}) & transcription</summary>
+      <details data-details ${openDetails.has(v.id) ? "open" : ""}>
+        <summary>Échantillons (${v.samples.length}) & transcription ${v.samples.length && v.samples.every((s) => s.transcript) ? "📝" : ""}</summary>
         <div class="samples">
-          ${v.samples.map((s) => `<div class="sample"><span class="name">${{ record: "🎤", system: "🖥️" }[s.source] || "📁"} ${esc(s.original_name || s.file)} · ${s.duration}s</span>
-            <audio controls preload="none" src="/api/voices/${v.id}/audio?sample=${encodeURIComponent(s.file.split("/").pop())}&t=${t}"></audio>
-            <button class="btn small danger" data-rm-sample="${esc(s.file.split("/").pop())}">✕</button></div>`).join("")}
+          ${v.samples.map((s) => {
+            const name = s.file.split("/").pop();
+            return `<div class="sample-block">
+              <div class="sample"><span class="name">${{ record: "🎤", system: "🖥️" }[s.source] || "📁"} ${esc(s.original_name || s.file)} · ${s.duration}s</span>
+                <audio controls preload="none" src="/api/voices/${v.id}/audio?sample=${encodeURIComponent(name)}&t=${t}"></audio>
+                <button class="btn small danger" data-rm-sample="${esc(name)}">✕</button></div>
+              <textarea rows="2" data-sample-text="${esc(name)}" placeholder="Texte exact prononcé dans cet échantillon (vide = inconnu)">${esc(s.transcript)}</textarea>
+            </div>`;
+          }).join("")}
           <div class="row" style="margin:6px 0 0">
             <button class="btn small" data-add-file>＋ Fichier</button>
             <button class="btn small rec" data-add-rec>● Enregistrer</button>
             <input type="file" accept="audio/*,video/*" hidden data-file-input>
           </div>
-          <label class="field">Transcription de la référence (utile pour F5-TTS)
-            <textarea rows="3" data-transcript placeholder="Texte exact prononcé dans les échantillons…">${esc(v.transcript)}</textarea></label>
+          <p class="muted" style="margin:4px 0;font-size:12px">Le texte n'est utile qu'à F5-TTS : il utilise un échantillon de 12 s maximum
+            (de préférence un échantillon dont le texte est rempli). Les autres modèles n'en ont pas besoin.</p>
           <div class="row" style="margin:0">
-            <button class="btn small" data-save-transcript>Enregistrer le texte</button>
-            ${asr.length ? `<button class="btn small" data-auto-transcribe="${asr[0].id}">Transcrire avec ${esc(asr[0].name.split(" (")[0])}</button>` : ""}
+            ${v.samples.length ? '<button class="btn small" data-save-transcript>Enregistrer les textes</button>' : ""}
+            ${asr.length && v.samples.length ? `<button class="btn small" data-auto-transcribe="${asr[0].id}">Transcrire avec ${esc(asr[0].name.split(" (")[0])}</button>` : ""}
           </div>
         </div>
       </details>
@@ -487,6 +493,14 @@ function renderVoices() {
 }
 
 const cardRecorders = new Map();
+const openDetails = new Set(); // voix dont le panneau « Échantillons » est ouvert
+
+$("#voice-list").addEventListener("toggle", (e) => {
+  const d = e.target.closest?.("[data-details]");
+  if (!d) return;
+  const id = d.closest("[data-voice]").dataset.voice;
+  d.open ? openDetails.add(id) : openDetails.delete(id);
+}, true);
 
 $("#voice-list").addEventListener("click", async (e) => {
   const card = e.target.closest("[data-voice]");
@@ -523,11 +537,13 @@ $("#voice-list").addEventListener("click", async (e) => {
       const system = $("#rec-device").value === SYSTEM_SOURCE;
       if (res && res.duration >= 1) await uploadSample(id, res.blob, system ? "son-du-pc.wav" : "record.wav", system ? "system" : "record");
     } else if (btn.hasAttribute("data-save-transcript")) {
-      await api(`/api/voices/${id}`, { method: "PATCH", json: { transcript: $("[data-transcript]", card).value } });
-      toast("Transcription enregistrée", "ok");
+      const texts = Object.fromEntries($$("[data-sample-text]", card).map((t) => [t.dataset.sampleText, t.value]));
+      await api(`/api/voices/${id}/transcripts`, { method: "PUT", json: { texts } });
+      toast("Textes enregistrés", "ok");
     } else if (btn.dataset.autoTranscribe) {
-      await busy(btn, "Transcription…", () => api(`/api/voices/${id}/transcribe`, { json: { model_id: btn.dataset.autoTranscribe } }));
-      toast("Transcription terminée", "ok");
+      const v = await busy(btn, "Transcription…", () => api(`/api/voices/${id}/transcribe`, { json: { model_id: btn.dataset.autoTranscribe } }));
+      const done = v.samples.filter((s) => s.transcript).length;
+      toast(`Transcription terminée : ${done}/${v.samples.length} échantillon(s) — textes visibles sous chaque échantillon, corrigez-les si besoin.`, "ok", 7000);
     } else if (btn.hasAttribute("data-prepare")) {
       const model = $("[data-prep-model]", card).value;
       const r = await busy(btn, "Entraînement…", () => api(`/api/voices/${id}/prepare`, { json: { model_id: model } }));
