@@ -150,3 +150,32 @@ def test_child_process_survives_invalid_hash_seed(monkeypatch, seed):
 def test_xtts_finetune_with_invalid_hash_seed(client, tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONHASHSEED", "-1")
     test_xtts_finetune_flow(client, tmp_path)
+
+
+def test_patch_coqui_before_tts_import(tmp_path):
+    """L'entraînement doit appliquer les mêmes contournements que le moteur XTTS (transformers 5, torchcodec)."""
+    import subprocess
+
+    stubs = {
+        "torch/__init__.py": "def isin(*a): return 'isin'\n",
+        "transformers/__init__.py": "",
+        "transformers/pytorch_utils.py": "",  # transformers 5 : plus de isin_mps_friendly
+        "TTS/__init__.py": "", "TTS/tts/__init__.py": "", "TTS/tts/models/__init__.py": "",
+        "TTS/tts/models/xtts.py": "import torchaudio\n",
+        "torchaudio/__init__.py": "def load(p): raise RuntimeError('torchcodec')\n",
+        # ce que fait coqui-tts à l'import (tortoise/autoregressive.py)
+        "TTS/tts/layers/__init__.py": "",
+        "TTS/tts/layers/autoregressive.py": "from transformers.pytorch_utils import isin_mps_friendly as isin\n",
+    }
+    for rel, code in stubs.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(code)
+    code = ("from voiceclone.engines.xtts import patch_coqui\npatch_coqui()\n"
+            "import TTS.tts.layers.autoregressive as a\nassert a.isin() == 'isin'\n"
+            "import TTS.tts.models.xtts as x\nassert type(x.torchaudio).__name__ == '_TorchaudioWithoutCodec'\n"
+            "print('ok')")
+    import os
+
+    env = {**os.environ, "PYTHONPATH": f"{tmp_path}{os.pathsep}{config.ROOT_DIR}"}
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
