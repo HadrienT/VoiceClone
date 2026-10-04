@@ -173,7 +173,7 @@ class RealtimeSession:
     def start(self, cfg: RealtimeConfig) -> None:
         if self.state in ("starting", "running"):
             self.stop()
-        sd = _sd()
+        self._check_io()
         self.cfg = cfg
         self.state, self.error = "starting", None
         self._stop.clear()
@@ -182,7 +182,7 @@ class RealtimeSession:
         self.transcripts.clear()
         try:
             self._prepare_models(cfg)
-            self._open_streams(sd, cfg)
+            self._open_io(cfg)
         except Exception as exc:
             self._close_streams()
             self.state, self.error = "error", str(exc)
@@ -235,6 +235,13 @@ class RealtimeSession:
             self.engine.prepare_voice(self.voice)
         if hasattr(self.engine, "reset_stream"):
             self.engine.reset_stream()
+
+    def _check_io(self) -> None:
+        """Vérifie au plus tôt que l'audio est disponible (avant de charger les modèles)."""
+        _sd()
+
+    def _open_io(self, cfg: RealtimeConfig) -> None:
+        self._open_streams(_sd(), cfg)
 
     def _open_streams(self, sd, cfg: RealtimeConfig) -> None:
         in_info = sd.query_devices(cfg.input_device, "input")
@@ -433,3 +440,41 @@ class RealtimeSession:
                 self._emit(wav, wsr)
             self.process_ms = (time.perf_counter() - t0) * 1000
             self.chunks += 1
+
+
+class BrowserRealtimeSession(RealtimeSession):
+    """Session live dont l'audio passe par le navigateur (WebSocket) au lieu des périphériques du serveur.
+
+    Le navigateur capte le micro du PC de l'utilisateur, envoie le PCM via `feed()`, et rejoue ce que
+    `on_audio` reçoit (PCM 16 bits mono à OUT_SR Hz) sur la sortie de son choix (ex. CABLE Input
+    pour Discord). Indispensable quand VoiceClone tourne sur un serveur distant.
+    """
+
+    OUT_SR = 24000
+
+    def __init__(self, manager: EngineManager, voices: VoiceStore, in_sr: int, on_audio) -> None:
+        super().__init__(manager, voices)
+        self.in_sr = int(in_sr)
+        self.out_sr = self.OUT_SR
+        self.on_audio = on_audio
+
+    def _check_io(self) -> None:
+        pass  # aucun périphérique côté serveur
+
+    def _open_io(self, cfg: RealtimeConfig) -> None:
+        self._out = self._mon = None
+
+    def feed(self, x: np.ndarray) -> None:
+        """Audio du micro reçu du navigateur (float32 mono à in_sr)."""
+        if self.state != "running":
+            return
+        x = np.asarray(x, dtype=np.float32) * self.cfg.input_gain
+        self.in_db = 0.8 * self.in_db + 0.2 * audio.rms_db(x)
+        self._in_q.put(x)
+
+    def _emit(self, x: np.ndarray, sr: int) -> None:
+        if len(x) == 0:
+            return
+        y = np.clip(audio.resample(x, sr, self.out_sr) * self.cfg.output_gain, -1.0, 1.0)
+        self.out_db = 0.8 * self.out_db + 0.2 * audio.rms_db(y)
+        self.on_audio((y * 32767).astype("<i2").tobytes())

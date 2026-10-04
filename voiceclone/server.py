@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+import numpy as np
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -18,7 +20,13 @@ from .downloads import DownloadManager
 from .engines.base import EngineError
 from .history import History
 from .manager import EngineManager, ModelNotReady
-from .realtime import RealtimeConfig, RealtimeSession, RealtimeUnavailable, list_devices
+from .realtime import (
+    BrowserRealtimeSession,
+    RealtimeConfig,
+    RealtimeSession,
+    RealtimeUnavailable,
+    list_devices,
+)
 from .registry import get_model
 from .voices import VoiceStore
 
@@ -378,6 +386,73 @@ def create_app() -> FastAPI:
     @app.get("/api/realtime/status")
     def rt_status():
         return live.status()
+
+    @app.websocket("/api/realtime/ws")
+    async def rt_browser(ws: WebSocket):
+        """Live via le navigateur : micro du PC -> serveur (GPU) -> sortie choisie dans le navigateur.
+
+        Protocole : 1er message texte = configuration JSON (+ "sample_rate" du micro), puis des
+        messages binaires PCM int16 mono. Le serveur renvoie du PCM int16 mono à 24 kHz et des
+        messages JSON {"type": "status" | "started" | "error", ...}.
+        """
+        from starlette.concurrency import run_in_threadpool
+
+        await ws.accept()
+        loop = asyncio.get_running_loop()
+        outbox: asyncio.Queue = asyncio.Queue()  # bytes (audio) ou dict (JSON), envoyés dans l'ordre
+        session: BrowserRealtimeSession | None = None
+
+        async def sender():
+            while True:
+                item = await outbox.get()
+                if isinstance(item, bytes):
+                    await ws.send_bytes(item)
+                else:
+                    await ws.send_json(item)
+
+        async def status_pump():
+            while True:
+                await asyncio.sleep(0.25)
+                if session is not None:
+                    outbox.put_nowait({"type": "status", **session.status()})
+
+        tasks = [asyncio.create_task(sender())]
+        try:
+            raw = await ws.receive_json()
+            in_sr = int(raw.pop("sample_rate", 48000))
+            fields = set(RealtimeStart.model_fields) - {"input_device", "output_device", "monitor_device"}
+            cfg = RealtimeConfig(**RealtimeStart(**{k: v for k, v in raw.items() if k in fields}).model_dump(
+                exclude={"input_device", "output_device", "monitor_device"}))
+            session = BrowserRealtimeSession(
+                manager, voices, in_sr, on_audio=lambda pcm: loop.call_soon_threadsafe(outbox.put_nowait, pcm))
+            outbox.put_nowait({"type": "loading"})
+            await run_in_threadpool(session.start, cfg)  # charge les modèles (peut être long la 1re fois)
+            outbox.put_nowait({"type": "started", "out_sample_rate": session.out_sr})
+            tasks.append(asyncio.create_task(status_pump()))
+            while True:
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    break
+                if msg.get("bytes"):
+                    pcm = np.frombuffer(msg["bytes"], dtype="<i2").astype(np.float32) / 32768.0
+                    session.feed(pcm)
+                elif msg.get("text") == "stop":
+                    break
+        except WebSocketDisconnect:
+            pass
+        except Exception as exc:  # erreur de config / modèle : on la renvoie au navigateur
+            log.warning("Live navigateur : %s", exc)
+            outbox.put_nowait({"type": "error", "detail": str(exc)})
+            await asyncio.sleep(0.2)  # laisse le temps au message de partir
+        finally:
+            for t in tasks:
+                t.cancel()
+            if session is not None:
+                await run_in_threadpool(session.stop)
+            try:
+                await ws.close()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------ interface
     if config.WEB_DIR.exists():

@@ -103,7 +103,7 @@ Le navigateur n'est pas ouvert automatiquement sans affichage. Depuis votre post
 ssh -L 7860:localhost:7860 utilisateur@serveur
 ```
 
-L'onglet **Live / Discord** utilise le micro et les sorties audio de la machine qui exécute VoiceClone : il n'a de sens que sur votre poste, pas sur un serveur sans carte son.
+L'onglet **Live / Discord**, en mode « Audio de ce PC » (par défaut), capte le micro du PC où la page est ouverte, envoie l'audio au serveur par WebSocket (via le tunnel), et rejoue la voix convertie sur la sortie choisie de ce PC (ex. *CABLE Input*). Le mode « Audio du serveur » n'est utile que si VoiceClone tourne sur votre propre PC.
 
 ---
 
@@ -152,7 +152,7 @@ Votre micro ──► VoiceClone (modèle) ──► câble virtuel ──► Di
    - **macOS** : [BlackHole 2ch](https://existential.audio/blackhole/) → sortie et entrée *BlackHole 2ch*.
    - **Linux** : `./scripts/linux_virtual_mic.sh` → sortie *VoiceClone_Sink*, Discord entrée *VoiceClone_Mic*
      (avec PortAudio/ALSA, choisissez la sortie `pulse` puis redirigez le flux vers *VoiceClone_Sink* dans `pavucontrol`).
-2. Onglet **Live / Discord** : micro en entrée, câble en sortie (marqué ★), casque en retour si vous voulez vous entendre.
+2. Onglet **Live / Discord**, mode **« Audio de ce PC »** (dans Chrome ou Edge) : micro en entrée, câble en sortie (marqué ★), casque en « Retour casque » si vous voulez vous entendre. Le calcul reste sur le serveur ; seul l'audio transite par le navigateur.
 3. Testez d'abord le mode **Test du routage** (micro brut) pour vérifier que Discord vous entend.
 4. Dans Discord : désactivez **Krisp / suppression de bruit** et la **sensibilité automatique** (ou baissez le seuil).
 
