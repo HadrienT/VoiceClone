@@ -155,8 +155,13 @@ export class BrowserLive {
         }
       };
       ws.onerror = () => reject(new Error("Connexion WebSocket impossible avec le serveur."));
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         if (ws !== this.ws) return;
+        if (ev.code === 4401) {
+          const err = new Error("Session expirée : rechargez la page pour vous reconnecter.");
+          if (this.running) this._fail(err.message);
+          return reject(err);
+        }
         if (this.running && !this.stopping) this._reconnect(config);
         else reject(new Error("Le serveur a fermé la connexion."));
       };

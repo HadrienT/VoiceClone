@@ -29,24 +29,24 @@ Légende : effort **S** (quelques heures) · **M** (une journée) · **L** (plus
 ## Lot 3 — Robustesse et exploitation (S-M)
 | # | Tâche | Effort | État |
 |---|---|---|---|
-| 3.1 | Script de test sur vrais modèles (`scripts/smoke_test.py`) | S | ☐ |
-| 3.2 | Mémoire GPU : affichage VRAM + déchargement automatique du moins utilisé | S | ☐ |
-| 3.3 | Page Diagnostic : versions installées, journaux du serveur dans l'interface | S | ☐ |
-| 3.4 | File de tâches (progression, annulation) pour les longues générations | M | ☐ |
-| 3.5 | Scripts d'installation par modèle + Dockerfile | M | ☐ |
+| 3.1 | Script de test sur vrais modèles (`scripts/smoke_test.py`) | S | ☑ |
+| 3.2 | Mémoire GPU : affichage VRAM + déchargement automatique du moins utilisé | S | ⚠ |
+| 3.3 | Page Diagnostic : versions installées, journaux du serveur dans l'interface | S | ☑ |
+| 3.4 | File de tâches (progression, annulation) pour les longues générations | M | ☑ |
+| 3.5 | Scripts d'installation par modèle + Dockerfile | M | ⚠ |
 
 ## Lot 4 — Sécurité et éthique (S-M)
 | # | Tâche | Effort | État |
 |---|---|---|---|
-| 4.1 | Mot de passe sur l'interface et l'API (`VOICECLONE_PASSWORD`) | S | ☐ |
+| 4.1 | Mot de passe sur l'interface et l'API (`VOICECLONE_PASSWORD`) | S | ☑ |
 | 4.2 | Trace du consentement enregistrée avec chaque voix | S | ☑ |
-| 4.3 | Filigrane uniforme optionnel sur toutes les sorties + outil de détection | M | ☐ |
+| 4.3 | Filigrane uniforme optionnel sur toutes les sorties + outil de détection | M | ☑ |
 
 ## Lot 5 — Audio et textes longs (M)
 | # | Tâche | Effort | État |
 |---|---|---|---|
 | 5.1 | Forme d'onde avec sélection avant import | M | ☐ |
-| 5.2 | Textes longs : phrase par phrase, régénérer une phrase, pauses `[pause 1s]`, export MP3 | M | ☐ |
+| 5.2 | Textes longs : phrase par phrase, régénérer une phrase, pauses `[pause 1s]`, export MP3 | M | ☑ |
 | 5.3 | Nettoyage avancé à l'import : DeepFilterNet et Demucs (optionnels, repli automatique) | M | ☐ |
 
 ## Lot 6 — Nouvelles fonctions (M)
@@ -63,4 +63,4 @@ Légende : effort **S** (quelques heures) · **M** (une journée) · **L** (plus
 | 7.1 | Seed-VC : conversion zero-shot temps réel de meilleure qualité | M | ☐ |
 | 7.2 | RVC : inférence de modèles .pth/.index + entraînement via Applio | L | ☐ |
 | 7.3 | Fine-tuning XTTS (jeu de données automatique, entraînement en tâche de fond, modèle fine-tuné sélectionnable) | L | ☐ |
-| 7.4 | Isolation des moteurs : un processus (et un Python/venv au choix) par modèle | L | ☐ |
+| 7.4 | Isolation des moteurs : un processus (et un Python/venv au choix) par modèle | L | ⚠ |

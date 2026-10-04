@@ -24,7 +24,9 @@
       <button data-tab="s2s"><span>🔁</span> Voix → Voix</button>
       <button data-tab="live"><span>🔴</span> Live / Discord</button>
       <button data-tab="history"><span>🕘</span> Historique</button>
+      <button data-tab="tools"><span>🩺</span> Diagnostic</button>
     </nav>
+    <div id="jobs-mini" class="jobs-mini hidden"></div>
     <div class="sys" id="sys">…</div>
   </aside>
 
@@ -146,9 +148,11 @@
         </div>
         <div id="tts-model-warning" class="notice warn hidden"></div>
         <label class="field">Texte
-          <textarea id="tts-text" rows="6" maxlength="5000" placeholder="Bonjour ! Ceci est ma voix clonée avec un modèle open source."></textarea>
+          <textarea id="tts-text" rows="6" maxlength="200000" placeholder="Bonjour ! Ceci est ma voix clonée avec un modèle open source."></textarea>
         </label>
-        <div class="counter"><span id="tts-count">0</span> / 5000</div>
+        <div class="counter"><span id="tts-hint" class="muted"></span> <span id="tts-count">0</span> caractères</div>
+        <p class="muted" style="font-size:12px;margin:0 0 8px">Astuce : <code>[pause 1s]</code> insère un silence ; une ligne vide
+          entre deux paragraphes aussi. Les textes longs sont générés phrase par phrase (chaque phrase reste corrigeable).</p>
         <details class="advanced">
           <summary>Réglages avancés</summary>
           <div id="tts-params" class="params"></div>
@@ -336,6 +340,44 @@
     </section>
 
     <!-- ============================== HISTORIQUE ============================== -->
+    <section id="tab-tools" class="tab">
+      <header class="page-head">
+        <h1>Diagnostic</h1>
+        <p>Matériel, mémoire, versions installées, réglages et journal du serveur.
+          <button class="btn small" id="diag-refresh">↻ Actualiser</button>
+          <button class="btn small" id="diag-report" title="Fichier à joindre pour demander de l'aide">⬇ Rapport</button></p>
+      </header>
+      <div class="grid2">
+        <div class="card"><h3>🖥️ Matériel</h3><div id="diag-hw"></div></div>
+        <div class="card"><h3>🧠 Modèles en mémoire</h3><div id="diag-loaded"></div>
+          <div class="actions" style="justify-content:flex-start"><button class="btn small" id="diag-free">Libérer la mémoire (décharger les modèles inactifs)</button></div></div>
+        <div class="card"><h3>⚙️ Réglages</h3>
+          <label class="check"><input type="checkbox" id="set-auto"> Décharger automatiquement le modèle le moins utilisé si la mémoire GPU manque</label>
+          <label class="field">Nombre maximal de modèles chargés (0 = illimité) <input type="number" id="set-max" min="0" max="20" style="max-width:120px"></label>
+          <label class="check"><input type="checkbox" id="set-wm"> Ajouter un filigrane inaudible à tout ce qui est généré</label>
+          <details class="advanced"><summary>Isolation : un Python par modèle (avancé)</summary>
+            <p class="muted" style="font-size:13px">Chemin d'un autre interpréteur Python (ex. <code>/home/moi/envs/chatterbox/bin/python</code>)
+              pour faire tourner ce modèle dans un processus séparé, avec ses propres versions de torch/transformers.
+              <code>python scripts/install.py --isolated &lt;modèle&gt;</code> le prépare automatiquement.</p>
+            <div id="set-python" class="grid2"></div></details>
+          <div class="actions"><button class="btn primary" id="set-save">Enregistrer</button></div></div>
+        <div class="card"><h3>🔎 Vérifier un filigrane</h3>
+          <p class="muted" style="font-size:13px">Déposez un fichier audio pour savoir s'il a été généré par VoiceClone avec le filigrane activé.</p>
+          <input type="file" id="wm-file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"><div id="wm-result" style="margin-top:8px"></div></div>
+        <div class="card"><h3>✅ Vérifications</h3><ul id="diag-checks" class="checks"></ul></div>
+        <div class="card"><h3>📦 Versions</h3><div id="diag-packages"></div></div>
+      </div>
+      <div class="card">
+        <div class="row" style="align-items:center">
+          <h3 style="margin:0" class="grow">📜 Journal du serveur</h3>
+          <label class="field">Niveau <select id="log-level"><option>INFO</option><option>WARNING</option><option>ERROR</option></select></label>
+          <label class="check" style="margin:0"><input type="checkbox" id="log-follow" checked> Suivre</label>
+          <button class="btn small" id="log-copy">Copier</button>
+        </div>
+        <pre id="diag-log" class="log"></pre>
+      </div>
+    </section>
+
     <section id="tab-history" class="tab">
       <header class="page-head">
         <h1>Historique</h1>
@@ -344,7 +386,8 @@
       <div class="row">
         <label class="field grow">Rechercher <input id="hist-q" placeholder="Texte, voix, modèle…"></label>
         <label class="field">Type <select id="hist-kind">
-          <option value="">Tout</option><option value="tts">Texte → Voix</option><option value="s2s">Voix → Voix</option>
+          <option value="">Tout</option><option value="tts">Texte → Voix</option><option value="long">Textes longs</option>
+          <option value="book">Livres audio</option><option value="s2s">Voix → Voix</option><option value="translate">Traductions</option>
         </select></label>
         <label class="check" style="margin:0 0 8px"><input type="checkbox" id="hist-fav"> Favoris seulement</label>
       </div>

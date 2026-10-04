@@ -1,18 +1,10 @@
 import { Recorder, toWav, listMicrophones, fmtTime, SYSTEM_SOURCE, canCaptureSystemAudio } from "./audio.js";
 import { BrowserLive, listBrowserDevices, canChooseOutput, micPermission, requestMic } from "./live-browser.js";
 
-// ---------------------------------------------------------------- utilitaires
-const $ = (sel, el = document) => el.querySelector(sel);
-const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-
-const LANGS = {
-  auto: "Détection auto", fr: "Français", en: "Anglais", es: "Espagnol", de: "Allemand", it: "Italien",
-  pt: "Portugais", pl: "Polonais", tr: "Turc", ru: "Russe", nl: "Néerlandais", cs: "Tchèque", ar: "Arabe",
-  "zh-cn": "Chinois", zh: "Chinois", hu: "Hongrois", ko: "Coréen", ja: "Japonais", hi: "Hindi", da: "Danois",
-  el: "Grec", fi: "Finnois", he: "Hébreu", ms: "Malais", no: "Norvégien", sv: "Suédois", sw: "Swahili",
-};
-const langName = (c) => LANGS[c] || c;
+import { $, $$, esc, LANGS, langName, store, api, toast, fmtBytes, busy } from "./util.js";
+import { watchJob, jobProgressHtml, refreshJobsPanel } from "./jobs.js";
+import { renderSegments } from "./longtext.js";
+import { showTools } from "./tools.js";
 
 const READ_PROMPTS = [
   "Bonjour, je m'appelle comme vous voulez. Aujourd'hui, il fait beau et je vais enregistrer ma voix pour essayer ce logiciel. J'espère que le résultat sera bluffant !",
@@ -22,55 +14,6 @@ const READ_PROMPTS = [
   "J'adore les longues balades en forêt, surtout en automne, quand les feuilles craquent sous les pieds et que l'air sent la terre mouillée.",
   "Un, deux, trois, quatre, cinq. Les chaussettes de l'archiduchesse sont-elles sèches, archisèches ? Voilà une phrase bien difficile à prononcer !",
 ];
-
-const store = {
-  get(k, d) { try { const v = localStorage.getItem("vc." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem("vc." + k, JSON.stringify(v)); } catch { /* stockage indisponible */ } },
-};
-
-async function api(path, opts = {}) {
-  const init = { ...opts };
-  if (opts.json !== undefined) {
-    init.method = init.method || "POST";
-    init.headers = { "Content-Type": "application/json", ...(init.headers || {}) };
-    init.body = JSON.stringify(opts.json);
-    delete init.json;
-  }
-  const res = await fetch(path, init);
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try {
-      const j = await res.json();
-      msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
-    } catch { /* corps non JSON */ }
-    throw new Error(msg);
-  }
-  if (opts.raw) return res;
-  const type = res.headers.get("content-type") || "";
-  return type.includes("json") ? res.json() : res;
-}
-
-function toast(msg, type = "info", ms = 4500) {
-  const el = document.createElement("div");
-  el.className = `toast ${type}`;
-  el.textContent = msg;
-  $("#toasts").append(el);
-  setTimeout(() => el.remove(), ms);
-}
-
-const fmtBytes = (b) => {
-  if (!b) return "0 o";
-  const u = ["o", "Ko", "Mo", "Go"];
-  const i = Math.min(u.length - 1, Math.floor(Math.log(b) / Math.log(1024)));
-  return `${(b / 1024 ** i).toFixed(i ? 1 : 0)} ${u[i]}`;
-};
-
-async function busy(btn, label, fn) {
-  const old = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = `<span class="spinner"></span> ${label}`;
-  try { return await fn(); } finally { btn.disabled = false; btn.innerHTML = old; }
-}
 
 const state = { models: [], voices: [], tab: store.get("tab", "models"), filter: "all" };
 
@@ -82,6 +25,7 @@ function showTab(tab) {
   $$(".tab").forEach((s) => s.classList.toggle("active", s.id === `tab-${tab}`));
   if (tab === "history") loadHistory();
   if (tab === "live") { loadDevices(); pollLive(); }
+  if (tab === "tools") showTools().catch((err) => toast(err.message, "error"));
 }
 $$("#nav button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
 
@@ -89,12 +33,15 @@ $$("#nav button").forEach((b) => b.addEventListener("click", () => showTab(b.dat
 async function loadSystem() {
   try {
     const s = await api("/api/system");
-    const dev = s.gpu ? `GPU <b>${esc(s.gpu)}</b> (${s.vram_gb} Go)` : `<b>${esc(s.device.toUpperCase())}</b>`;
+    const g = (s.gpus || []).find((x) => x.selected);
+    const dev = s.gpu ? `GPU <b>${esc(s.gpu)}</b>${g ? `<br>VRAM : <b>${g.used_gb}</b> / ${g.total_gb} Go` : ` (${s.vram_gb} Go)`}` : `<b>${esc(s.device.toUpperCase())}</b>`;
     $("#sys").innerHTML = `Calcul : ${dev}<br>PyTorch : <b>${s.torch ? esc(s.torch) : "non installé"}</b><br>v${esc(s.version)}`;
     $("#data-dir").textContent = s.data_dir + "/models";
   } catch {
     $("#sys").textContent = "Serveur injoignable";
   }
+  clearTimeout(state.sysPoll);
+  state.sysPoll = setTimeout(loadSystem, 10000); // mémoire GPU à jour
 }
 
 // ---------------------------------------------------------------- modèles
@@ -697,9 +644,16 @@ function applyVoiceSettings() {
   if (st.language) $("#tts-lang").value = st.language;
 }
 $("#tts-voice").addEventListener("change", () => { store.set("voice", $("#tts-voice").value); applyVoiceSettings(); });
-$("#tts-text").addEventListener("input", () => { $("#tts-count").textContent = $("#tts-text").value.length; });
+const LONG_TEXT = 600;
+const isLongText = (t) => t.length > LONG_TEXT || /\[\s*pause/i.test(t) || /\n\s*\n/.test(t.trim());
+function updateTTSCount() {
+  const t = $("#tts-text").value;
+  $("#tts-count").textContent = t.length;
+  $("#tts-hint").textContent = isLongText(t.trim()) ? "mode texte long (phrase par phrase) ·" : "";
+}
+$("#tts-text").addEventListener("input", updateTTSCount);
 $("#tts-text").value = store.get("tts.text", "");
-$("#tts-count").textContent = $("#tts-text").value.length;
+updateTTSCount();
 
 function showResult(el, blob, info) {
   if (el._url) URL.revokeObjectURL(el._url);
@@ -715,6 +669,7 @@ $("#tts-go").addEventListener("click", (e) => {
   if (!$("#tts-voice").value) return toast("Créez d'abord une voix.", "error");
   store.set("tts.text", $("#tts-text").value);
   const model = getModel($("#tts-model").value);
+  if (isLongText(text)) return generateLong(e.currentTarget, text);
   return busy(e.currentTarget, model?.loaded ? "Génération…" : "Chargement du modèle…", async () => {
     try {
       const res = await api("/api/tts", {
@@ -733,6 +688,35 @@ $("#tts-go").addEventListener("click", (e) => {
     } catch (err) { toast(err.message, "error"); }
   });
 });
+
+function rememberTTSSettings() {
+  const settings = { tts: { model_id: $("#tts-model").value, language: $("#tts-lang").value, params: readParams($("#tts-params")) } };
+  api(`/api/voices/${$("#tts-voice").value}`, { method: "PATCH", json: { settings } })
+    .then((v) => { const i = state.voices.findIndex((x) => x.id === v.id); if (i >= 0) state.voices[i] = v; })
+    .catch(() => {});
+}
+
+/** Texte long : tâche de fond phrase par phrase, puis éditeur de phrases. */
+function generateLong(btn, text) {
+  const out = $("#tts-result");
+  return busy(btn, "Génération longue…", async () => {
+    try {
+      const job = await api("/api/tts/long", {
+        json: { model_id: $("#tts-model").value, voice_id: $("#tts-voice").value, text, language: $("#tts-lang").value, params: readParams($("#tts-params")) },
+      });
+      out.classList.remove("hidden");
+      delete out.dataset.historyId;
+      const done = await watchJob(job.id, (j) => { out.innerHTML = jobProgressHtml(j); });
+      await renderSegments(out, done.result.history_id);
+      toast(`Terminé : ${done.result.duration} s d'audio.`, "ok");
+      rememberTTSSettings();
+      loadModels();
+    } catch (err) {
+      out.innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+      toast(err.message, "error");
+    }
+  });
+}
 
 $("#tts-compare").addEventListener("click", (e) => {
   const text = $("#tts-text").value.trim();
@@ -1099,12 +1083,13 @@ function renderHistory() {
   const items = (state.history || []).filter((h) => (!kind || h.kind === kind) && (!favOnly || h.favorite)
     && (!q || [h.text, h.voice_name, getModel(h.model_id)?.name || h.model_id].join(" ").toLowerCase().includes(q)));
   $("#history-list").innerHTML = items.map((h) => `<div class="card h-item">
-      <div><div class="txt">${h.kind === "tts" ? "💬" : "🔁"} ${esc(h.text || (h.kind === "s2s" ? "Conversion de voix" : ""))}</div>
+      <div><div class="txt">${{ tts: "💬", long: "📜", book: "📚", s2s: "🔁", translate: "🌍" }[h.kind] || "🔊"} ${esc(h.title || h.text || (h.kind === "s2s" ? "Conversion de voix" : ""))}${h.watermark ? ' <span class="badge" title="Filigrane inaudible">wm</span>' : ""}</div>
         <div class="sub">${esc(h.voice_name || "")} · ${esc(getModel(h.model_id)?.name || h.model_id)} · ${h.duration} s · ${new Date(h.created_at * 1000).toLocaleString("fr-FR")}</div></div>
       <audio controls preload="none" src="/api/history/${h.id}/audio"></audio>
       <div class="badges">
         <button class="btn small" data-fav-hist="${h.id}" title="Favori">${h.favorite ? "★" : "☆"}</button>
-        ${h.kind === "tts" && h.text ? `<button class="btn small" data-reuse-hist="${h.id}" title="Reprendre ces réglages dans Texte → Voix">↻</button>` : ""}
+        ${["tts", "long"].includes(h.kind) && h.text ? `<button class="btn small" data-reuse-hist="${h.id}" title="Reprendre ces réglages dans Texte → Voix">↻</button>` : ""}
+        ${h.segments ? `<button class="btn small" data-seg-hist="${h.id}" title="Corriger phrase par phrase">✎</button>` : ""}
         <a class="btn small" href="/api/history/${h.id}/audio" download title="WAV">⬇</a>
         <a class="btn small" href="/api/history/${h.id}/audio?format=mp3" download title="MP3">MP3</a>
         <button class="btn small danger" data-del-hist="${h.id}">✕</button></div></div>`).join("")
@@ -1116,7 +1101,13 @@ $("#history-list").addEventListener("click", async (e) => {
   const del = e.target.closest("[data-del-hist]");
   const fav = e.target.closest("[data-fav-hist]");
   const reuse = e.target.closest("[data-reuse-hist]");
+  const segBtn = e.target.closest("[data-seg-hist]");
   try {
+    if (segBtn) {
+      showTab("tts");
+      await renderSegments($("#tts-result"), segBtn.dataset.segHist);
+      return $("#tts-result").scrollIntoView({ behavior: "smooth" });
+    }
     if (del) {
       await api(`/api/history/${del.dataset.delHist}`, { method: "DELETE" });
       state.history = state.history.filter((h) => h.id !== del.dataset.delHist);
@@ -1155,6 +1146,7 @@ function initLangs() {
   applyS2SMode();
   applyLiveMode();
   showTab(state.tab);
+  refreshJobsPanel();
 })();
 
 // ------------------------------------------------ Live : messages, micro, texte dit

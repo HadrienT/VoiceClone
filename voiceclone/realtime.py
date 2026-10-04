@@ -246,11 +246,16 @@ class RealtimeSession:
         self._in_q = queue.Queue()
         self.chunks = self.dropped = 0
         self.transcripts.clear()
+        # Les modèles du Live ne doivent pas être déchargés automatiquement pendant la session
+        self._release_pins()
+        self._pinned = [m for m in (cfg.model_id, cfg.asr_model_id, cfg.say_model_id) if m]
+        self.manager.pin(*self._pinned)
         try:
             self._prepare_models(cfg)
             self._open_io(cfg)
         except Exception as exc:
             self._close_streams()
+            self._release_pins()
             self.state, self.error = "error", str(exc)
             raise
         worker = {"vc": self._vc_loop, "asr_tts": self._asr_loop, "passthrough": self._passthrough_loop}[cfg.mode]
@@ -266,11 +271,17 @@ class RealtimeSession:
             t.join(timeout=3)
         self._threads = []
         self._close_streams()
+        self._release_pins()
         if self.state != "error":
             self.state = "idle"
         self.in_db = self.out_db = -120.0
 
     # ------------------------------------------------------------- internes
+    def _release_pins(self) -> None:
+        pinned, self._pinned = getattr(self, "_pinned", []), []
+        if pinned and hasattr(self.manager, "unpin"):
+            self.manager.unpin(*pinned)
+
     def _guard(self, fn):
         def run():
             try:

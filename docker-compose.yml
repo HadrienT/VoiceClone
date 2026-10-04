@@ -1,0 +1,23 @@
+# docker compose up -d   →   http://localhost:7860
+services:
+  voiceclone:
+    build:
+      context: .
+      args:
+        TORCH: cu124            # cpu, cu118, cu121, cu124, cu128…
+        MODELS: "xtts-v2 whisper-small openvoice-v2"
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - VOICECLONE_PASSWORD=${VOICECLONE_PASSWORD:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped

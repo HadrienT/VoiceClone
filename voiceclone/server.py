@@ -16,11 +16,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, audio, config, opus
+from . import __version__, audio, auth, config, diagnostics, logs, opus, settings
 from . import device as devmod
 from .downloads import DownloadManager
 from .engines.base import EngineError
 from .history import History
+from .jobs import JobManager
 from .manager import EngineManager, ModelNotReady
 from .realtime import (
     BrowserRealtimeSession,
@@ -44,6 +45,16 @@ class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
     language: str = "fr"
     params: dict = Field(default_factory=dict)
+
+
+class LongTTSRequest(TTSRequest):
+    text: str = Field(min_length=1, max_length=200_000)
+    title: str = ""
+
+
+class SegmentRegen(BaseModel):
+    text: str | None = Field(None, max_length=2000)
+    params: dict | None = None
 
 
 class VoiceUpdate(BaseModel):
@@ -100,14 +111,23 @@ class SayRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
 
 
+class SettingsUpdate(BaseModel):
+    max_loaded_models: int | None = Field(None, ge=0, le=20)
+    auto_unload: bool | None = None
+    watermark: bool | None = None
+    engine_python: dict[str, str] | None = None
+
+
 # ------------------------------------------------------------------- app
 def create_app() -> FastAPI:
     config.ensure_dirs()
+    logs.install()
     downloads = DownloadManager()
     manager = EngineManager(downloads)
     voices = VoiceStore()
     history = History()
     live = RealtimeSession(manager, voices)
+    jobs = JobManager()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -129,6 +149,7 @@ def create_app() -> FastAPI:
     app.state.voices = voices
     app.state.history = history
     app.state.live = live
+    app.state.jobs = jobs
 
     @app.exception_handler(KeyError)
     async def _not_found(_: Request, exc: KeyError):
@@ -169,6 +190,40 @@ def create_app() -> FastAPI:
     def system():
         return {"version": __version__, "data_dir": str(config.DATA_DIR), **devmod.system_info()}
 
+    @app.get("/api/diagnostics")
+    def diag():
+        return diagnostics.report(manager)
+
+    @app.get("/api/logs")
+    def get_logs(after: int = 0, level: str = "INFO"):
+        return {"last": logs.HANDLER.counter, "records": logs.HANDLER.since(after, level)}
+
+    @app.get("/api/settings")
+    def get_settings():
+        return settings.load()
+
+    @app.patch("/api/settings")
+    def patch_settings(body: SettingsUpdate):
+        return settings.update(**body.model_dump(exclude_none=True))
+
+    # -------------------------------------------------------------- tâches
+    @app.get("/api/jobs")
+    def list_jobs():
+        return jobs.list()
+
+    @app.get("/api/jobs/{job_id}")
+    def get_job(job_id: str):
+        return jobs.get(job_id).to_dict()
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str):
+        return jobs.cancel(job_id).to_dict()
+
+    @app.delete("/api/jobs/{job_id}")
+    def delete_job(job_id: str):
+        jobs.remove(job_id)
+        return {"ok": True}
+
     # ------------------------------------------------------------- modèles
     @app.get("/api/models")
     def models():
@@ -197,6 +252,14 @@ def create_app() -> FastAPI:
     def load(model_id: str):
         manager.load_async(model_id)
         return manager.status(get_model(model_id))
+
+    @app.post("/api/models/unload-idle")
+    def unload_idle():
+        """Libère la mémoire : décharge tous les modèles qui ne servent pas à un Live en cours."""
+        done = [m["id"] for m in manager.loaded() if not m["pinned"]]
+        for mid in done:
+            manager.unload(mid)
+        return {"unloaded": done}
 
     @app.post("/api/models/{model_id}/unload")
     def unload(model_id: str):
@@ -357,10 +420,100 @@ def create_app() -> FastAPI:
         item = history.add(wav, sr, kind="tts", model_id=req.model_id, voice_id=voice.id, voice_name=voice.name,
                            params=req.params,
                            text=req.text[:500], language=req.language, seconds=round(elapsed, 2))
-        return Response(audio.to_wav_bytes(wav, sr), media_type="audio/wav", headers={
+        # fichier enregistré (avec le filigrane s'il est activé)
+        return Response(history.path(item["id"]).read_bytes(), media_type="audio/wav", headers={
             "X-History-Id": item["id"], "X-Generation-Seconds": f"{elapsed:.2f}",
             "X-Audio-Seconds": f"{len(wav) / sr:.2f}",
         })
+
+    def render_long(job, req: LongTTSRequest, kind: str = "long", extra: dict | None = None) -> dict:
+        """Génère un texte long phrase par phrase (tâche de fond) ; chaque phrase reste régénérable."""
+        from . import longform
+
+        voice = voices.get(req.voice_id)
+        segments = longform.parse(req.text)
+        texts = [i for i, sg in enumerate(segments) if sg["type"] == "text"]
+        if not texts:
+            raise ValueError("Aucun texte à lire.")
+        job.update(0.0, "Chargement du modèle…")
+        engine = manager.get(req.model_id, "tts")
+        wavs: dict[int, np.ndarray] = {}
+        sr = 24000
+        t0 = time.time()
+        for n, i in enumerate(texts, 1):
+            job.update((n - 1) / len(texts), f"Phrase {n}/{len(texts)}")
+            with manager.infer_lock:
+                wav, sr = engine.tts(segments[i]["text"], voice, req.language, **req.params)
+            wavs[i] = wav
+        full = longform.assemble([(sg, wavs.get(i)) for i, sg in enumerate(segments)], sr)
+        item = history.add(full, sr, kind=kind, model_id=req.model_id, voice_id=voice.id, voice_name=voice.name,
+                           params=req.params, text=req.text[:500], language=req.language,
+                           seconds=round(time.time() - t0, 2), title=req.title or None, **(extra or {}))
+        parts = history.parts_dir(item["id"])
+        parts.mkdir(parents=True, exist_ok=True)
+        for i, wav in wavs.items():
+            audio.save_wav(parts / f"{i:04d}.wav", wav, sr)
+            segments[i]["file"] = f"{i:04d}.wav"
+            segments[i]["duration"] = round(len(wav) / sr, 2)
+        history.set_meta(item["id"], segments=segments, sample_rate=sr)
+        return {"history_id": item["id"], "duration": item["duration"]}
+
+    @app.post("/api/tts/long")
+    def tts_long(req: LongTTSRequest):
+        """Texte long (ou avec des [pause]) : tâche de fond avec progression ; voir /api/jobs/{id}."""
+        voices.get(req.voice_id)
+        get_model(req.model_id)
+        title = req.title or (req.text[:40] + ("…" if len(req.text) > 40 else ""))
+        return jobs.submit("tts", title, lambda job: render_long(job, req)).to_dict()
+
+    @app.get("/api/history/{item_id}/segments/{index}/audio")
+    def segment_audio(item_id: str, index: int):
+        path = history.parts_dir(item_id) / f"{index:04d}.wav"
+        if not path.exists():
+            raise KeyError("Phrase introuvable")
+        return FileResponse(path, media_type="audio/wav")
+
+    @app.post("/api/history/{item_id}/segments/{index}")
+    def regenerate_segment(item_id: str, index: int, body: SegmentRegen):
+        """Régénère une seule phrase (texte éventuellement corrigé) puis recolle l'ensemble."""
+        from . import longform
+
+        item = history.get(item_id)
+        segments = item.get("segments") or []
+        if not (0 <= index < len(segments)) or segments[index]["type"] != "text":
+            raise KeyError("Phrase introuvable")
+        voice = voices.get(item["voice_id"])
+        engine = manager.get(item["model_id"], "tts")
+        text = (body.text or segments[index]["text"]).strip()
+        params = body.params if body.params is not None else item.get("params") or {}
+        with manager.infer_lock:
+            wav, sr = engine.tts(text, voice, item.get("language", "fr"), **params)
+        parts = history.parts_dir(item_id)
+        target_sr = item.get("sample_rate", sr)
+        if sr != target_sr:
+            wav = audio.resample(wav, sr, target_sr)
+        audio.save_wav(parts / f"{index:04d}.wav", wav, target_sr)
+        segments[index].update(text=text, file=f"{index:04d}.wav", duration=round(len(wav) / target_sr, 2),
+                               regenerated=segments[index].get("regenerated", 0) + 1)
+        loaded = [(sg, audio.load_audio(parts / sg["file"])[0] if sg.get("file") else None) for sg in segments]
+        full = longform.assemble(loaded, target_sr)
+        return history.replace_audio(item_id, full, target_sr, segments=segments,
+                                     text=" ".join(sg.get("text", "") for sg in segments if sg["type"] == "text")[:500])
+
+    # ------------------------------------------------------------ filigrane
+    @app.post("/api/watermark/detect")
+    async def watermark_detect(file: UploadFile = File(...)):
+        from starlette.concurrency import run_in_threadpool
+
+        from . import watermark
+
+        data = await read_upload(file)
+
+        def work():
+            x, sr = audio.load_audio(data)
+            return watermark.detect(x, sr)
+
+        return await run_in_threadpool(work)
 
     # ----------------------------------------------------- speech-to-speech
     @app.post("/api/vc")
@@ -411,12 +564,16 @@ def create_app() -> FastAPI:
         headers = {"X-History-Id": item["id"], "X-Generation-Seconds": f"{elapsed:.2f}"}
         if text:
             headers["X-Transcript"] = quote(text[:500])
-        return Response(audio.to_wav_bytes(wav, sr), media_type="audio/wav", headers=headers)
+        return Response(history.path(item["id"]).read_bytes(), media_type="audio/wav", headers=headers)
 
     # ------------------------------------------------------------ historique
     @app.get("/api/history")
     def list_history(limit: int = 50):
         return history.list(limit)
+
+    @app.get("/api/history/{item_id}")
+    def get_history(item_id: str):
+        return history.get(item_id)
 
     @app.get("/api/history/{item_id}/audio")
     def history_audio(item_id: str, format: str = "wav"):
@@ -561,7 +718,13 @@ def create_app() -> FastAPI:
                 pass
 
     # ------------------------------------------------------------ interface
+    @app.get("/api/auth")
+    def auth_state():
+        return {"protected": bool(auth.password())}
+
     if config.WEB_DIR.exists():
         app.mount("/", StaticFiles(directory=str(config.WEB_DIR), html=True), name="web")
 
+    if auth.password():  # protège interface, API et WebSocket
+        app.add_middleware(auth.AuthMiddleware, pw=auth.password())
     return app

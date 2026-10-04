@@ -274,3 +274,26 @@ input[type=range] { padding: 0; accent-color: var(--accent); background: none; b
 .fav-chip button:hover { color: var(--text); }
 #live-mic-state.on { color: var(--accent-2); border-color: #20c99755; }
 #live-mic-state.off { color: var(--danger); border-color: #ef5d5d55; }
+.notice.ok { background: #20c9971a; border-color: #20c99755; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.grid2 > .card { margin: 0; }
+.card h3 { margin-top: 0; }
+.gpu { margin-bottom: 12px; }
+.vram { display: flex; height: 10px; border-radius: 99px; background: var(--panel-2); overflow: hidden; margin: 4px 0; }
+.vram .other { background: #8a8fa3; }
+.vram .mine { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+pre.log { background: #0b0d12; color: #cfd3e1; font-size: 12px; line-height: 1.45; padding: 12px; border-radius: var(--radius);
+  max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; }
+.jobs-mini { margin: 12px 0; padding: 10px 12px; border-radius: var(--radius); background: var(--panel-2); font-size: 12px; display: grid; gap: 6px; }
+.job-mini span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-mini .bar, .job-progress .bar { height: 6px; border-radius: 99px; background: var(--border); overflow: hidden; margin-top: 3px; }
+.job-mini .bar span, .job-progress .bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .4s; }
+.job-progress { display: grid; gap: 6px; }
+.segments summary { cursor: pointer; font-weight: 600; margin: 10px 0 6px; }
+.seg-list { margin: 0; padding-left: 28px; display: grid; gap: 4px; }
+.sent { display: flex; gap: 6px; align-items: center; }
+.sent input { flex: 1; min-width: 0; }
+.sent.flash { animation: flash 1.2s; }
+@keyframes flash { from { background: #20c99733; } to { background: transparent; } }
+.seg-pause { color: var(--muted); font-size: 12px; list-style: none; margin-left: -18px; }
