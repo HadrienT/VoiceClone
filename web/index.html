@@ -43,6 +43,7 @@
         <button class="chip" data-filter="tts">Texte → Voix</button>
         <button class="chip" data-filter="vc">Voix → Voix</button>
         <button class="chip" data-filter="asr">Transcription</button>
+        <button class="chip" data-filter="mt">Traduction</button>
       </div>
       <div id="model-list" class="grid"></div>
     </section>
@@ -180,12 +181,15 @@
         <div class="seg" id="s2s-mode">
           <button data-mode="vc" class="active">Conversion directe <small>garde intonation & rythme</small></button>
           <button data-mode="asr_tts">Transcription + TTS <small>re-synthèse complète</small></button>
+          <button data-mode="translate">🌍 Traduction <small>votre voix dans une autre langue</small></button>
         </div>
         <div class="row">
           <label class="field grow">Modèle <select id="s2s-model"></select></label>
           <label class="field grow asr-only hidden">Transcription <select id="s2s-asr"></select></label>
           <label class="field grow">Voix cible <select id="s2s-voice"></select></label>
-          <label class="field asr-only hidden">Langue <select id="s2s-lang"></select></label>
+          <label class="field asr-only hidden"><span class="lang-label">Langue</span> <select id="s2s-lang"></select></label>
+          <label class="field tr-only hidden">Langue d'arrivée <select id="s2s-target"></select></label>
+          <label class="field tr-only hidden">Traduction <select id="s2s-mt"></select></label>
         </div>
         <div id="s2s-model-warning" class="notice warn hidden"></div>
         <div class="split">
@@ -237,7 +241,9 @@
           <label class="field grow model-field">Modèle <select id="live-model"></select></label>
           <label class="field grow asr-only hidden">Transcription <select id="live-asr"></select></label>
           <label class="field grow model-field">Voix <select id="live-voice"></select></label>
-          <label class="field asr-only hidden">Langue <select id="live-lang"></select></label>
+          <label class="field asr-only hidden"><span class="lang-label">Langue</span> <select id="live-lang"></select></label>
+          <label class="field asr-only hidden">🌍 Traduire vers <select id="live-target"></select></label>
+          <label class="field asr-only tr-only hidden">Traduction <select id="live-mt"></select></label>
         </div>
         <div class="row">
           <label class="field grow">🎤 Micro (entrée) <select id="live-in"></select></label>

@@ -53,6 +53,9 @@ class Engine:
     def transcribe(self, wav: np.ndarray, sr: int, language: str | None = None) -> str:
         raise EngineError(f"{self.spec.name} ne fait pas de reconnaissance vocale.")
 
+    def translate(self, text: str, src: str, tgt: str) -> str:
+        raise EngineError(f"{self.spec.name} ne fait pas de traduction.")
+
 
 def to_numpy(wav) -> np.ndarray:
     """Convertit un tenseur torch / liste en numpy float32 mono."""

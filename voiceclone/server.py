@@ -105,6 +105,8 @@ class RealtimeStart(BaseModel):
     params: dict = Field(default_factory=dict)
     say_model_id: str | None = None
     warmup: bool = True
+    translate_to: str | None = None
+    mt_model_id: str | None = None
 
 
 class SayRequest(BaseModel):
@@ -529,11 +531,13 @@ def create_app() -> FastAPI:
         file: UploadFile = File(...),
         model_id: str = Form(...),
         voice_id: str = Form(...),
-        mode: str = Form("vc"),  # vc | asr_tts
+        mode: str = Form("vc"),  # vc | asr_tts | translate
         asr_model_id: str = Form(""),
         language: str = Form("fr"),
         source_voice_id: str = Form(""),
         params: str = Form("{}"),
+        target_language: str = Form(""),
+        mt_model_id: str = Form(""),
     ):
         import json
 
@@ -546,8 +550,21 @@ def create_app() -> FastAPI:
             voice = voices.get(voice_id)
             x, sr = audio.load_audio(data)
             t0 = time.time()
-            text = None
-            if mode == "asr_tts":
+            text = translated = None
+            if mode == "translate":
+                from .translation import speech_to_translated_text
+
+                if not asr_model_id or not target_language:
+                    raise HTTPException(400, "Choisissez un modèle de transcription et la langue d'arrivée.")
+                asr = manager.get(asr_model_id, "asr")
+                tts_engine = manager.get(model_id, "tts")
+                text, translated = speech_to_translated_text(manager, asr, x, sr, language, target_language,
+                                                             mt_model_id or None)
+                if not translated:
+                    raise HTTPException(400, "Aucune parole détectée dans l'audio.")
+                with manager.infer_lock:
+                    wav, out_sr = tts_engine.tts(translated, voice, target_language, **extra)
+            elif mode == "asr_tts":
                 if not asr_model_id:
                     raise HTTPException(400, "Choisissez un modèle de transcription.")
                 asr = manager.get(asr_model_id, "asr")
@@ -564,14 +581,18 @@ def create_app() -> FastAPI:
                     extra["source_voice"] = voices.get(source_voice_id)
                 with manager.infer_lock:
                     wav, out_sr = engine.convert(x, sr, voice, **extra)
-            return wav, out_sr, text, time.time() - t0, voice
+            return wav, out_sr, text, translated, time.time() - t0, voice
 
-        wav, sr, text, elapsed, voice = await run_in_threadpool(work)
-        item = history.add(wav, sr, kind="s2s", mode=mode, model_id=model_id, voice_id=voice.id,
-                           voice_name=voice.name, text=(text or "")[:500], seconds=round(elapsed, 2))
+        wav, sr, text, translated, elapsed, voice = await run_in_threadpool(work)
+        item = history.add(wav, sr, kind="translate" if mode == "translate" else "s2s", mode=mode,
+                           model_id=model_id, voice_id=voice.id, voice_name=voice.name,
+                           text=(translated or text or "")[:500], source_text=(text or "")[:500] if translated else None,
+                           language=target_language or language, seconds=round(elapsed, 2))
         headers = {"X-History-Id": item["id"], "X-Generation-Seconds": f"{elapsed:.2f}"}
         if text:
             headers["X-Transcript"] = quote(text[:500])
+        if translated:
+            headers["X-Translation"] = quote(translated[:500])
         return Response(history.path(item["id"]).read_bytes(), media_type="audio/wav", headers=headers)
 
     # ------------------------------------------------------------ historique

@@ -73,7 +73,7 @@ async function loadModels() {
 
 function renderModels() {
   const list = state.models.filter((m) => state.filter === "all" || m.capabilities.includes(state.filter));
-  const capName = { tts: "Texte → Voix", vc: "Voix → Voix", asr: "Transcription" };
+  const capName = { tts: "Texte → Voix", vc: "Voix → Voix", asr: "Transcription", mt: "Traduction" };
   $("#model-list").innerHTML = list.map((m) => {
     const dl = m.download;
     const running = dl && (dl.status === "running" || dl.status === "pending");
@@ -160,12 +160,15 @@ const getVoice = (id) => state.voices.find((v) => v.id === id);
 function refreshModelSelects() {
   const opts = (cap) => modelsWith(cap).map((m) => ({ value: m.id, label: modelLabel(m) }));
   fillSelect($("#tts-model"), opts("tts"), { value: $("#tts-model").value || store.get("tts.model") });
-  const s2sCap = state.s2sMode === "asr_tts" ? "tts" : "vc";
+  const s2sCap = state.s2sMode === "vc" ? "vc" : "tts";
   fillSelect($("#s2s-model"), opts(s2sCap), { value: $("#s2s-model").value || store.get(`s2s.model.${s2sCap}`) });
   fillSelect($("#s2s-asr"), opts("asr"), { value: store.get("asr.model") });
   const liveCap = state.liveMode === "asr_tts" ? "tts" : "vc";
   fillSelect($("#live-model"), opts(liveCap), { value: $("#live-model").value || store.get(`live.model.${liveCap}`) });
   fillSelect($("#live-asr"), opts("asr"), { value: store.get("asr.model") });
+  const mtOpts = [{ value: "", label: "Automatique" }, ...opts("mt")];
+  fillSelect($("#s2s-mt"), mtOpts, { value: store.get("mt.model", "") });
+  fillSelect($("#live-mt"), mtOpts, { value: store.get("mt.model", "") });
   fillSelect($("#live-say-model"), opts("tts"), { value: $("#live-say-model").value || store.get("live.say.model"), empty: "Aucun modèle de synthèse" });
   onTTSModelChange();
   onS2SModelChange();
@@ -790,11 +793,15 @@ function setSegMode(segEl, mode) {
 
 function onS2SModelChange() {
   const m = getModel($("#s2s-model").value);
-  const cap = state.s2sMode === "asr_tts" ? "tts" : "vc";
+  const cap = state.s2sMode === "vc" ? "vc" : "tts";
+  const tr = state.s2sMode === "translate";
   if (m) store.set(`s2s.model.${cap}`, m.id);
-  fillLangSelect($("#s2s-lang"), m, getVoice($("#s2s-voice").value)?.language);
+  // en traduction : « Je parle » = toutes les langues de Whisper ; la langue d'arrivée dépend du modèle TTS
+  fillLangSelect($("#s2s-lang"), tr ? null : m, tr ? store.get("s2s.src", "fr") : getVoice($("#s2s-voice").value)?.language);
+  $("#tab-s2s .lang-label").textContent = tr ? "Je parle" : "Langue";
+  if (tr) fillLangSelect($("#s2s-target"), m, store.get("s2s.target", "en"));
   const asr = getModel($("#s2s-asr").value);
-  const warnModel = m && !isReady(m) ? m : state.s2sMode === "asr_tts" && asr && !isReady(asr) ? asr : m;
+  const warnModel = m && !isReady(m) ? m : state.s2sMode !== "vc" && asr && !isReady(asr) ? asr : m;
   showWarning($("#s2s-model-warning"), warnModel);
   if (!modelsWith(cap).length) $("#s2s-model-warning").classList.add("hidden");
   if (state.s2sParamsFor !== m?.id) { renderParams($("#s2s-params"), m, "s2s"); state.s2sParamsFor = m?.id; }
@@ -802,7 +809,8 @@ function onS2SModelChange() {
 
 function applyS2SMode() {
   setSegMode($("#s2s-mode"), state.s2sMode);
-  $$("#tab-s2s .asr-only").forEach((el) => el.classList.toggle("hidden", state.s2sMode !== "asr_tts"));
+  $$("#tab-s2s .asr-only").forEach((el) => el.classList.toggle("hidden", state.s2sMode === "vc"));
+  $$("#tab-s2s .tr-only").forEach((el) => el.classList.toggle("hidden", state.s2sMode !== "translate"));
   refreshModelSelects();
 }
 
@@ -815,6 +823,9 @@ $("#s2s-mode").addEventListener("click", (e) => {
 });
 $("#s2s-model").addEventListener("change", onS2SModelChange);
 $("#s2s-asr").addEventListener("change", () => { store.set("asr.model", $("#s2s-asr").value); onS2SModelChange(); });
+$("#s2s-lang").addEventListener("change", () => { if (state.s2sMode === "translate") store.set("s2s.src", $("#s2s-lang").value); });
+$("#s2s-target").addEventListener("change", () => store.set("s2s.target", $("#s2s-target").value));
+["#s2s-mt", "#live-mt"].forEach((id) => $(id).addEventListener("change", (e) => store.set("mt.model", e.target.value)));
 
 function setS2SSource(blob, name) {
   s2sSource = { blob, name };
@@ -847,10 +858,16 @@ $("#s2s-go").addEventListener("click", (e) => {
       fd.append("asr_model_id", $("#s2s-asr").value || "");
       fd.append("language", $("#s2s-lang").value || "fr");
       fd.append("params", JSON.stringify(readParams($("#s2s-params"))));
+      if (state.s2sMode === "translate") {
+        fd.append("target_language", $("#s2s-target").value);
+        fd.append("mt_model_id", $("#s2s-mt").value);
+      }
       const res = await api("/api/vc", { method: "POST", body: fd, raw: true });
       const transcript = res.headers.get("X-Transcript");
+      const translation = res.headers.get("X-Translation");
       const gen = res.headers.get("X-Generation-Seconds");
-      showResult($("#s2s-result"), await res.blob(), `Converti en ${gen} s${transcript ? ` · « ${esc(decodeURIComponent(transcript))} »` : ""}`);
+      const said = transcript ? ` · « ${esc(decodeURIComponent(transcript))} »` : "";
+      showResult($("#s2s-result"), await res.blob(), `Converti en ${gen} s${said}${translation ? ` → « ${esc(decodeURIComponent(translation))} »` : ""}`);
       loadModels();
     } catch (err) { toast(err.message, "error"); }
   });
@@ -878,7 +895,12 @@ function onLiveModelChange() {
   const m = getModel($("#live-model").value);
   const cap = state.liveMode === "asr_tts" ? "tts" : "vc";
   if (m) store.set(`live.model.${cap}`, m.id);
-  fillLangSelect($("#live-lang"), m, getVoice($("#live-voice").value)?.language);
+  const tgt = $("#live-target").value;
+  fillLangSelect($("#live-lang"), tgt ? null : m, tgt ? store.get("live.src", "fr") : getVoice($("#live-voice").value)?.language);
+  $("#tab-live .lang-label").textContent = tgt ? "Je parle" : "Langue";
+  const tlangs = m && !m.languages.includes("*") ? m.languages : Object.keys(LANGS).filter((l) => l !== "auto" && l !== "zh-cn");
+  fillSelect($("#live-target"), [{ value: "", label: "Pas de traduction" }, ...tlangs.map((l) => ({ value: l, label: langName(l) }))], { value: tgt || store.get("live.target", "") });
+  $$("#tab-live .tr-only").forEach((el) => el.classList.toggle("hidden", state.liveMode !== "asr_tts" || !$("#live-target").value));
   const asr = getModel($("#live-asr").value);
   const warnModel = state.liveMode === "passthrough" ? null : m && !isReady(m) ? m : state.liveMode === "asr_tts" && asr && !isReady(asr) ? asr : m;
   showWarning($("#live-model-warning") || $("#live-dev-error"), warnModel);
@@ -1012,6 +1034,8 @@ function liveSettings() {
     end_silence_ms: v("#live-eos"), input_gain: v("#live-ig"), output_gain: v("#live-og"),
     params: readParams($("#live-params")),
     say_model_id: $("#live-say-model").value || null,
+    translate_to: state.liveMode === "asr_tts" ? $("#live-target").value || null : null,
+    mt_model_id: $("#live-mt").value || null,
     warmup: $("#live-warmup").checked,
   };
 }
@@ -1080,7 +1104,7 @@ function renderLiveStatus(s) {
   $("#live-error").classList.toggle("hidden", !s.error);
   const tr = s.transcripts || [];
   $("#live-transcripts").classList.toggle("hidden", !tr.length);
-  $("#live-transcripts").innerHTML = tr.map((t) => `<div>${esc(t.text)}<small>${t.first_audio_ms ? `voix après ${t.first_audio_ms} ms` : ""}</small></div>`).join("");
+  $("#live-transcripts").innerHTML = tr.map((t) => `<div>${esc(t.text)}${t.translation ? ` <b>→ ${esc(t.translation)}</b>` : ""}<small>${t.first_audio_ms ? `voix après ${t.first_audio_ms} ms` : ""}</small></div>`).join("");
   $$("#live-mode button, #live-where button").forEach((b) => { b.disabled = state.liveRunning; });
 }
 
@@ -1285,3 +1309,6 @@ $("#live-say-favs").addEventListener("click", (e) => {
   if (un) { const f = sayFavs(); f.splice(+un.dataset.unfav, 1); store.set("live.say.favs", f); renderSayFavs(); }
 });
 renderSayFavs();
+
+$("#live-target").addEventListener("change", () => { store.set("live.target", $("#live-target").value); onLiveModelChange(); });
+$("#live-lang").addEventListener("change", () => { if ($("#live-target").value) store.set("live.src", $("#live-lang").value); });

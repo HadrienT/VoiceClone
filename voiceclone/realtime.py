@@ -144,6 +144,8 @@ class RealtimeConfig:
     params: dict = field(default_factory=dict)
     say_model_id: str | None = None  # modèle TTS pour le texte tapé (« Dire dans Discord »)
     warmup: bool = True  # inférence à blanc au démarrage : évite la latence du tout premier morceau
+    translate_to: str | None = None  # mode asr_tts : langue de sortie (traduction vocale)
+    mt_model_id: str | None = None  # modèle de traduction (sinon choisi automatiquement)
 
 
 class RealtimeSession:
@@ -214,7 +216,14 @@ class RealtimeSession:
         def run():
             engine = self.manager.get(model_id, "tts")
             t0 = time.perf_counter()
-            gen = engine.tts_stream(text, self.voice, self.cfg.language, **self.cfg.params)
+            spoken, lang = text, self.cfg.language
+            tgt = self.cfg.translate_to if self.cfg.mode == "asr_tts" else None
+            if tgt and tgt != lang:  # Live en traduction : le texte tapé est traduit aussi
+                from .translation import translate_text
+
+                spoken, lang = translate_text(self.manager, text, lang, tgt, self.cfg.mt_model_id), tgt
+                entry["translation"] = spoken
+            gen = engine.tts_stream(spoken, self.voice, lang, **self.cfg.params)
             while not self._stop.is_set():
                 with self.manager.infer_lock:
                     piece = next(gen, None)
@@ -248,7 +257,7 @@ class RealtimeSession:
         self.transcripts.clear()
         # Les modèles du Live ne doivent pas être déchargés automatiquement pendant la session
         self._release_pins()
-        self._pinned = [m for m in (cfg.model_id, cfg.asr_model_id, cfg.say_model_id) if m]
+        self._pinned = [m for m in (cfg.model_id, cfg.asr_model_id, cfg.say_model_id, cfg.mt_model_id) if m]
         self.manager.pin(*self._pinned)
         try:
             self._prepare_models(cfg)
@@ -515,14 +524,28 @@ class RealtimeSession:
             except queue.Empty:
                 continue
             t0 = time.perf_counter()
-            with self.manager.infer_lock:
-                text = self.asr.transcribe(utt, self.in_sr, cfg.language)
-            if not text:
+            out_lang = cfg.language
+            if cfg.translate_to and cfg.translate_to != cfg.language:
+                from .translation import speech_to_translated_text
+
+                try:
+                    text, spoken = speech_to_translated_text(self.manager, self.asr, utt, self.in_sr, cfg.language,
+                                                             cfg.translate_to, cfg.mt_model_id)
+                except Exception as exc:  # pas de modèle de traduction : on le signale sans couper le Live
+                    self.transcripts.append({"text": f"⚠ {exc}", "at": time.time()})
+                    continue
+                out_lang = cfg.translate_to
+            else:
+                with self.manager.infer_lock:
+                    text = spoken = self.asr.transcribe(utt, self.in_sr, cfg.language)
+            if not spoken:
                 continue
             entry = {"text": text, "at": time.time(), "asr_ms": round((time.perf_counter() - t0) * 1000)}
+            if spoken != text:
+                entry["translation"] = spoken
             self.transcripts.append(entry)
             first = True
-            gen = self.engine.tts_stream(text, self.voice, cfg.language, **cfg.params)
+            gen = self.engine.tts_stream(spoken, self.voice, out_lang, **cfg.params)
             while True:
                 with self.manager.infer_lock:
                     piece = next(gen, None)
