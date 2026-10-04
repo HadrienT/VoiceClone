@@ -142,3 +142,8 @@ def test_sample_transcripts_and_error_details(client, fake_model, monkeypatch):
     with TestClient(create_app(), raise_server_exceptions=False) as c:
         r = c.post("/api/tts", json={"model_id": "fake", "voice_id": v["id"], "text": "x"})
     assert r.status_code == 500 and "panne de test" in r.json()["detail"]
+
+
+def test_ui_files_are_revalidated(client):
+    assert client.get("/app.js").headers["cache-control"] == "no-cache"
+    assert "cache-control" not in client.get("/api/models").headers

@@ -91,6 +91,15 @@ def create_app() -> FastAPI:
         manager.unload_all()
 
     app = FastAPI(title="VoiceClone", version=__version__, lifespan=lifespan)
+
+    @app.middleware("http")
+    async def _no_stale_ui(request: Request, call_next):
+        # Sans cette consigne, le navigateur peut garder l'ancien app.js après une mise à jour
+        # (git pull) : il revalide désormais chaque fichier de l'interface (réponse 304 si inchangé).
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
     app.state.manager = manager
     app.state.voices = voices
     app.state.history = history

@@ -543,7 +543,8 @@ $("#voice-list").addEventListener("click", async (e) => {
     } else if (btn.dataset.autoTranscribe) {
       const v = await busy(btn, "Transcription…", () => api(`/api/voices/${id}/transcribe`, { json: { model_id: btn.dataset.autoTranscribe } }));
       const done = v.samples.filter((s) => s.transcript).length;
-      toast(`Transcription terminée : ${done}/${v.samples.length} échantillon(s) — textes visibles sous chaque échantillon, corrigez-les si besoin.`, "ok", 7000);
+      if (done) toast(`Transcription terminée : ${done}/${v.samples.length} échantillon(s) — textes visibles sous chaque échantillon, corrigez-les si besoin.`, "ok", 7000);
+      else toast("Whisper n'a reconnu aucune parole dans ces échantillons. Vérifiez la langue de la voix ou tapez le texte à la main.", "error", 9000);
     } else if (btn.hasAttribute("data-prepare")) {
       const model = $("[data-prep-model]", card).value;
       const r = await busy(btn, "Entraînement…", () => api(`/api/voices/${id}/prepare`, { json: { model_id: model } }));
