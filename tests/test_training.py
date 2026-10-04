@@ -131,3 +131,22 @@ def test_seedvc_repo_dir(tmp_path, monkeypatch):
     assert seedvc.ensure_repo() == repo and str(repo) in sys.path
     sys.path.remove(str(repo))
     assert json.dumps(registry.get_model("seed-vc").to_dict())
+
+
+@pytest.mark.parametrize("seed", ["-1", "99999999999", "abc"])
+def test_child_process_survives_invalid_hash_seed(monkeypatch, seed):
+    import subprocess
+
+    # une bibliothèque du serveur a écrit une graine invalide : le Python enfant doit quand même démarrer
+    monkeypatch.setenv("PYTHONHASHSEED", seed)
+    assert subprocess.run([sys.executable, "-c", "pass"], env=dict(__import__("os").environ)).returncode != 0
+    r = subprocess.run([sys.executable, "-c", "print('ok')"], env=config.child_env(), capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout.strip() == "ok"
+    assert config.child_env(X="1")["X"] == "1"
+    monkeypatch.setenv("PYTHONHASHSEED", "42")
+    assert config.child_env()["PYTHONHASHSEED"] == "42"  # une valeur valide est conservée
+
+
+def test_xtts_finetune_with_invalid_hash_seed(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONHASHSEED", "-1")
+    test_xtts_finetune_flow(client, tmp_path)
