@@ -45,6 +45,21 @@ def find_cuts(x: np.ndarray, sr: int, min_s: float, max_s: float) -> list[int]:
     return cuts
 
 
+def split(x: np.ndarray, sr: int, min_s: float = 4.0, max_s: float = 11.0) -> list[np.ndarray]:
+    """Découpe un signal en morceaux de min_s à max_s secondes, coupés aux silences, avec fondus."""
+    bounds = [0, *find_cuts(x, sr, min_s, max_s), len(x)]
+    fade = int(sr * 0.01)
+    ramp = np.linspace(0, 1, fade, dtype=np.float32)
+    parts = []
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        part = x[a:b].copy()
+        if len(part) > 2 * fade:  # petits fondus pour éviter les clics aux coupures
+            part[:fade] *= ramp
+            part[-fade:] *= ramp[::-1]
+        parts.append(part)
+    return parts
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Découpe un audio en morceaux courts aux silences.")
     p.add_argument("input", type=Path, help="fichier audio à découper")
@@ -58,16 +73,9 @@ def main() -> None:
     x, sr = audio.load_audio(args.input)
     out_dir = args.out or args.input.with_name(f"{args.input.stem}_morceaux")
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    bounds = [0, *find_cuts(x, sr, args.min, args.max), len(x)]
-    fade = int(sr * 0.01)
-    ramp = np.linspace(0, 1, fade, dtype=np.float32)
-    print(f"{args.input.name} : {len(x) / sr:.1f} s → {len(bounds) - 1} morceau(x) dans {out_dir}/")
-    for i, (a, b) in enumerate(zip(bounds[:-1], bounds[1:]), 1):
-        part = x[a:b].copy()
-        if len(part) > 2 * fade:  # petits fondus pour éviter les clics aux coupures
-            part[:fade] *= ramp
-            part[-fade:] *= ramp[::-1]
+    parts = split(x, sr, args.min, args.max)
+    print(f"{args.input.name} : {len(x) / sr:.1f} s → {len(parts)} morceau(x) dans {out_dir}/")
+    for i, part in enumerate(parts, 1):
         path = audio.save_wav(out_dir / f"{args.input.stem}_{i:02d}.wav", part, sr)
         print(f"  {path.name}  {len(part) / sr:5.1f} s")
 
