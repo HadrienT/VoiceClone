@@ -1,5 +1,5 @@
 import { Recorder, toWav, listMicrophones, fmtTime, SYSTEM_SOURCE, canCaptureSystemAudio } from "./audio.js";
-import { BrowserLive, listBrowserDevices, canChooseOutput } from "./live-browser.js";
+import { BrowserLive, listBrowserDevices, canChooseOutput, micPermission, requestMic } from "./live-browser.js";
 
 // ---------------------------------------------------------------- utilitaires
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -766,7 +766,16 @@ function fillDeviceSelects(inputs, outputs) {
 async function loadDevices() {
   try {
     if (state.liveWhere === "browser") {
+      const perm = await micPermission();
       const d = await listBrowserDevices();
+      if (!d.labeled || perm === "denied") {
+        fillDeviceSelects([], []);
+        return showDeviceNotice(perm === "denied"
+          ? `<b>L'accès au micro est bloqué pour cette page.</b> Cliquez sur l'icône à gauche de l'adresse
+             (🔒 ou ⓘ) → <i>Micro</i> → <b>Autoriser</b>, puis rechargez la page (F5).`
+          : `Pour lister votre micro, votre casque et VB-CABLE, Chrome doit autoriser l'accès au micro.
+             <div class="actions" style="justify-content:flex-start"><button class="btn primary small" id="live-allow-mic">🎤 Autoriser l'accès au micro</button></div>`);
+      }
       const outputs = d.outputs.map((x) => ({ ...x, name: x.label, default: x.id === "default" }));
       fillDeviceSelects(d.inputs.map((x) => ({ ...x, name: x.label, default: x.id === "default" })), outputs);
       if (!canChooseOutput()) {
@@ -781,12 +790,25 @@ async function loadDevices() {
     }
   } catch (err) {
     fillDeviceSelects([], []);
+    if (err.message === "NOT_SECURE") {
+      return showDeviceNotice(`Le navigateur bloque le micro sur cette adresse (${esc(location.host)}). Ouvrez la page via
+        <b>http://localhost:${esc(location.port || "80")}</b> (redirection de port VS Code / tunnel SSH) ou en HTTPS.`);
+    }
     showDeviceNotice(state.liveWhere === "server"
       ? `${esc(err.message)}<br>Si VoiceClone tourne sur un serveur distant, choisissez « Audio de ce PC ».`
       : `Accès aux périphériques refusé : ${esc(err.message)}`);
   }
 }
 $("#live-refresh").addEventListener("click", loadDevices);
+$("#live-dev-error").addEventListener("click", async (e) => {
+  if (!e.target.closest("#live-allow-mic")) return;
+  try {
+    await requestMic();
+  } catch (err) {
+    toast(`Micro refusé : ${err.message}`, "error", 8000);
+  }
+  loadDevices();
+});
 ["#live-in", "#live-out", "#live-mon"].forEach((s) => $(s).addEventListener("change", () => {
   store.set(deviceKey(), { input: $("#live-in").value, output: $("#live-out").value, monitor: $("#live-mon").value });
 }));
