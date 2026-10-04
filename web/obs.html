@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VoiceClone — OBS</title>
+  <style>
+    /* Page pensée pour une « Source navigateur » OBS : fond transparent par défaut. */
+    :root { --size: 36px; --color: #ffffff; --bg: rgba(0, 0, 0, .55); --accent: #7c5cff; }
+    html, body { margin: 0; background: transparent; color: var(--color);
+      font: 700 var(--size)/1.25 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+    #wrap { position: fixed; left: 0; right: 0; bottom: 0; padding: 16px; display: flex; flex-direction: column;
+      gap: 8px; align-items: center; }
+    #wrap.top { top: 0; bottom: auto; }
+    .line { background: var(--bg); padding: 6px 16px; border-radius: 12px; max-width: 92vw; text-align: center;
+      text-shadow: 0 2px 6px #000a; transition: opacity .6s; }
+    .line .src { display: block; font-size: .6em; font-weight: 500; opacity: .75; }
+    .line.typed::before { content: "💬 "; }
+    .line.old { opacity: 0; }
+    #ind { position: fixed; top: 16px; left: 16px; display: flex; align-items: center; gap: 10px;
+      background: var(--bg); padding: 8px 14px; border-radius: 99px; font-size: calc(var(--size) * .55); }
+    #dot { width: .9em; height: .9em; border-radius: 50%; background: #666; transition: transform .08s, background .2s; }
+    #ind.on #dot { background: var(--accent); box-shadow: 0 0 18px var(--accent); }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="ind" class="hidden"><span id="dot"></span><span id="name"></span></div>
+  <div id="wrap"></div>
+  <script>
+    // Paramètres d'adresse : ?lines=2&size=40&color=%23fff&bg=rgba(0,0,0,.5)&show=subs|indicator|both
+    //   &translation=both|only&fade=8&position=bottom|top&key=<mot de passe si VOICECLONE_PASSWORD>
+    const q = new URLSearchParams(location.search);
+    const opt = (k, d) => q.get(k) ?? d;
+    const root = document.documentElement.style;
+    root.setProperty("--size", `${parseInt(opt("size", 36), 10)}px`);
+    root.setProperty("--color", opt("color", "#ffffff"));
+    root.setProperty("--bg", opt("bg", "rgba(0,0,0,.55)"));
+    const show = opt("show", "both");
+    const fade = parseFloat(opt("fade", 8)) * 1000;
+    const lines = parseInt(opt("lines", 2), 10);
+    const translationMode = opt("translation", "both");
+    if (opt("position", "bottom") === "top") document.getElementById("wrap").classList.add("top");
+    const keyParam = q.get("key") ? `&key=${encodeURIComponent(q.get("key"))}` : "";
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+    async function tick() {
+      try {
+        const r = await fetch(`/api/overlay?lines=${lines}${keyParam}`, { cache: "no-store" });
+        const s = await r.json();
+        const ind = document.getElementById("ind");
+        ind.classList.toggle("hidden", show === "subs" || !s.active);
+        ind.classList.toggle("on", !!s.speaking);
+        document.getElementById("name").textContent = s.voice || "";
+        const scale = s.speaking ? 1 + Math.min(0.6, Math.max(0, (s.output_db + 45) / 50)) : 1;
+        document.getElementById("dot").style.transform = `scale(${scale})`;
+        const now = Date.now() / 1000;
+        document.getElementById("wrap").innerHTML = show === "indicator" ? "" : (s.lines || []).map((l) => {
+          const main = l.translation && translationMode !== "source" ? l.translation : l.text;
+          const sub = l.translation && translationMode === "both" ? `<span class="src">${esc(l.text)}</span>` : "";
+          const old = fade > 0 && (now - l.at) * 1000 > fade ? " old" : "";
+          return `<div class="line${l.typed ? " typed" : ""}${old}">${sub}${esc(main)}</div>`;
+        }).join("");
+      } catch { /* serveur indisponible : on réessaie */ }
+      setTimeout(tick, 250);
+    }
+    tick();
+  </script>
+</body>
+</html>

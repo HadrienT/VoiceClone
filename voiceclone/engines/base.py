@@ -53,6 +53,26 @@ class Engine:
     def transcribe(self, wav: np.ndarray, sr: int, language: str | None = None) -> str:
         raise EngineError(f"{self.spec.name} ne fait pas de reconnaissance vocale.")
 
+    def translate(self, text: str, src: str, tgt: str) -> str:
+        raise EngineError(f"{self.spec.name} ne fait pas de traduction.")
+
+
+def mix_sources(voice: Voice) -> list[tuple[Voice, float]]:
+    """Sources d'une voix mélangée (voir VoiceStore.create_mix) ; liste vide pour une voix normale."""
+    if not getattr(voice, "mix", None):
+        return []
+    from ..voices import VoiceStore
+
+    return VoiceStore(voice.dir.parent).mix_sources(voice)
+
+
+def weighted(items, weights):
+    """Somme pondérée de tenseurs / tableaux de même forme (empreintes de voix)."""
+    total = None
+    for x, w in zip(items, weights):
+        total = x * w if total is None else total + x * w
+    return total
+
 
 def to_numpy(wav) -> np.ndarray:
     """Convertit un tenseur torch / liste en numpy float32 mono."""

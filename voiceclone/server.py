@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -15,11 +16,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, audio, config
+from . import __version__, audio, auth, config, diagnostics, logs, opus, settings
 from . import device as devmod
 from .downloads import DownloadManager
 from .engines.base import EngineError
 from .history import History
+from .jobs import JobManager
 from .manager import EngineManager, ModelNotReady
 from .realtime import (
     BrowserRealtimeSession,
@@ -29,7 +31,7 @@ from .realtime import (
     list_devices,
 )
 from .registry import get_model
-from .voices import VoiceStore
+from .voices import VoiceStore, consent_record
 
 log = logging.getLogger("voiceclone")
 
@@ -45,11 +47,57 @@ class TTSRequest(BaseModel):
     params: dict = Field(default_factory=dict)
 
 
+class LongTTSRequest(TTSRequest):
+    text: str = Field(min_length=1, max_length=200_000)
+    title: str = ""
+
+
+class BookChapter(BaseModel):
+    title: str = Field("", max_length=200)
+    text: str = Field(min_length=1, max_length=200_000)
+
+
+class BookRequest(BaseModel):
+    title: str = Field("Livre audio", max_length=200)
+    chapters: list[BookChapter] = Field(min_length=1, max_length=500)
+    model_id: str
+    voice_id: str
+    language: str = "fr"
+    params: dict = Field(default_factory=dict)
+    format: str = "mp3"  # mp3 | wav
+    announce_titles: bool = True
+
+
+class SegmentRegen(BaseModel):
+    text: str | None = Field(None, max_length=2000)
+    params: dict | None = None
+
+
 class VoiceUpdate(BaseModel):
     name: str | None = None
     language: str | None = None
     description: str | None = None
     transcript: str | None = None
+    settings: dict | None = None
+
+
+class MixSource(BaseModel):
+    voice_id: str
+    weight: float = Field(ge=0, le=100)
+
+
+class MixRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    sources: list[MixSource] = Field(min_length=2, max_length=5)
+    language: str | None = None
+
+
+class SampleOrder(BaseModel):
+    files: list[str]  # noms des échantillons (ex. "003.wav") dans l'ordre voulu
+
+
+class HistoryUpdate(BaseModel):
+    favorite: bool | None = None
 
 
 class TranscriptsUpdate(BaseModel):
@@ -82,16 +130,62 @@ class RealtimeStart(BaseModel):
     input_gain: float = Field(1.0, ge=0, le=10)
     output_gain: float = Field(1.0, ge=0, le=10)
     params: dict = Field(default_factory=dict)
+    say_model_id: str | None = None
+    warmup: bool = True
+    translate_to: str | None = None
+    mt_model_id: str | None = None
+
+
+class SayRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class SettingsUpdate(BaseModel):
+    max_loaded_models: int | None = Field(None, ge=0, le=20)
+    auto_unload: bool | None = None
+    watermark: bool | None = None
+    engine_python: dict[str, str] | None = None
+    applio_dir: str | None = None
+    applio_python: str | None = None
+
+
+class XTTSTrainRequest(BaseModel):
+    voice_id: str
+    epochs: int = Field(10, ge=1, le=200)
+    batch_size: int = Field(2, ge=1, le=32)
+    grad_accum: int = Field(4, ge=1, le=64)
+    asr_model_id: str | None = None
+    language: str | None = None
+    name: str | None = Field(None, max_length=100)
+
+
+class RVCTrainRequest(BaseModel):
+    voice_id: str
+    epochs: int = Field(200, ge=1, le=2000)
+    batch_size: int = Field(8, ge=1, le=64)
+    sample_rate: int = Field(40000)
+    save_every: int = Field(25, ge=1, le=500)
 
 
 # ------------------------------------------------------------------- app
 def create_app() -> FastAPI:
     config.ensure_dirs()
+    logs.install()
+    from . import training
+
+    training.load_custom_models()  # modèles affinés localement (XTTS…)
     downloads = DownloadManager()
     manager = EngineManager(downloads)
     voices = VoiceStore()
     history = History()
     live = RealtimeSession(manager, voices)
+    jobs = JobManager()
+    browser_sessions: list[BrowserRealtimeSession] = []  # Live lancés depuis un navigateur
+
+    def active_session():
+        """Live en cours (serveur ou navigateur, le plus récent) : cible du texte tapé et de la page OBS."""
+        running = [x for x in [live, *browser_sessions] if x.state == "running"]
+        return max(running, key=lambda x: x.started_at or 0) if running else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -113,6 +207,7 @@ def create_app() -> FastAPI:
     app.state.voices = voices
     app.state.history = history
     app.state.live = live
+    app.state.jobs = jobs
 
     @app.exception_handler(KeyError)
     async def _not_found(_: Request, exc: KeyError):
@@ -153,6 +248,40 @@ def create_app() -> FastAPI:
     def system():
         return {"version": __version__, "data_dir": str(config.DATA_DIR), **devmod.system_info()}
 
+    @app.get("/api/diagnostics")
+    def diag():
+        return diagnostics.report(manager)
+
+    @app.get("/api/logs")
+    def get_logs(after: int = 0, level: str = "INFO"):
+        return {"last": logs.HANDLER.counter, "records": logs.HANDLER.since(after, level)}
+
+    @app.get("/api/settings")
+    def get_settings():
+        return settings.load()
+
+    @app.patch("/api/settings")
+    def patch_settings(body: SettingsUpdate):
+        return settings.update(**body.model_dump(exclude_none=True))
+
+    # -------------------------------------------------------------- tâches
+    @app.get("/api/jobs")
+    def list_jobs():
+        return jobs.list()
+
+    @app.get("/api/jobs/{job_id}")
+    def get_job(job_id: str):
+        return jobs.get(job_id).to_dict()
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str):
+        return jobs.cancel(job_id).to_dict()
+
+    @app.delete("/api/jobs/{job_id}")
+    def delete_job(job_id: str):
+        jobs.remove(job_id)
+        return {"ok": True}
+
     # ------------------------------------------------------------- modèles
     @app.get("/api/models")
     def models():
@@ -182,6 +311,14 @@ def create_app() -> FastAPI:
         manager.load_async(model_id)
         return manager.status(get_model(model_id))
 
+    @app.post("/api/models/unload-idle")
+    def unload_idle():
+        """Libère la mémoire : décharge tous les modèles qui ne servent pas à un Live en cours."""
+        done = [m["id"] for m in manager.loaded() if not m["pinned"]]
+        for mid in done:
+            manager.unload(mid)
+        return {"unloaded": done}
+
     @app.post("/api/models/{model_id}/unload")
     def unload(model_id: str):
         manager.unload(model_id)
@@ -198,6 +335,7 @@ def create_app() -> FastAPI:
         language: str = Form("fr"),
         description: str = Form(""),
         consent: bool = Form(False),
+        consent_owner: str = Form("self"),
         transcript: str = Form(""),
         source: str = Form("upload"),
         files: list[UploadFile] = File(default=[]),
@@ -205,7 +343,7 @@ def create_app() -> FastAPI:
         if not consent:
             raise HTTPException(400, "Vous devez confirmer avoir le droit d'utiliser cette voix.")
         payloads = [(await read_upload(f), f.filename or "") for f in files]
-        voice = voices.create(name, language, description)
+        voice = voices.create(name, language, description, consent=consent_record(consent_owner, "web"))
         try:
             for data, fname in payloads:
                 voice = voices.add_sample(voice.id, data, source=source, original_name=fname,
@@ -214,6 +352,14 @@ def create_app() -> FastAPI:
             voices.delete(voice.id)
             raise
         return voice.to_dict()
+
+    @app.post("/api/voices/mix")
+    def mix_voices(body: MixRequest):
+        """Crée une voix intermédiaire (ex. 70 % voix A + 30 % voix B)."""
+        try:
+            return voices.create_mix(body.name, [(s.voice_id, s.weight) for s in body.sources], body.language).to_dict()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/voices/{voice_id}")
     def get_voice(voice_id: str):
@@ -244,6 +390,7 @@ def create_app() -> FastAPI:
         target_seconds: float = Form(30.0),
         replace: bool = Form(False),
         transcribe_model_id: str = Form(""),
+        method: str = Form("auto"),
     ):
         """Import intelligent : nettoie l'enregistrement, le découpe, ne garde que les meilleurs passages
         (le meilleur en premier) et, si un modèle Whisper est indiqué, les transcrit."""
@@ -257,7 +404,8 @@ def create_app() -> FastAPI:
         def work():
             voices.get(voice_id)
             x, sr = audio.load_audio(data)
-            pieces, report = auto_prepare(x, sr, enhance=enhance, target_s=max(5.0, min(target_seconds, 120.0)))
+            pieces, report = auto_prepare(x, sr, enhance=enhance, method=method,
+                                          target_s=max(5.0, min(target_seconds, 120.0)))
             if replace:
                 for smp in list(voices.get(voice_id).samples):
                     voices.remove_sample(voice_id, smp.file)
@@ -274,6 +422,17 @@ def create_app() -> FastAPI:
 
         voice, report = await run_in_threadpool(work)
         return {"voice": voice.to_dict(), "report": report}
+
+    @app.get("/api/enhance/methods")
+    def enhance_methods():
+        from . import enhance
+
+        return enhance.describe()
+
+    @app.put("/api/voices/{voice_id}/order")
+    def reorder_samples(voice_id: str, body: SampleOrder):
+        """Ordre des échantillons : le premier sert de référence principale (Chatterbox n'en écoute que 10 s)."""
+        return voices.reorder(voice_id, [f"samples/{f}" for f in body.files]).to_dict()
 
     @app.delete("/api/voices/{voice_id}/samples/{name}")
     def delete_sample(voice_id: str, name: str):
@@ -333,11 +492,268 @@ def create_app() -> FastAPI:
             wav, sr = engine.tts(req.text, voice, req.language, **req.params)
         elapsed = time.time() - t0
         item = history.add(wav, sr, kind="tts", model_id=req.model_id, voice_id=voice.id, voice_name=voice.name,
+                           params=req.params,
                            text=req.text[:500], language=req.language, seconds=round(elapsed, 2))
-        return Response(audio.to_wav_bytes(wav, sr), media_type="audio/wav", headers={
+        # fichier enregistré (avec le filigrane s'il est activé)
+        return Response(history.path(item["id"]).read_bytes(), media_type="audio/wav", headers={
             "X-History-Id": item["id"], "X-Generation-Seconds": f"{elapsed:.2f}",
             "X-Audio-Seconds": f"{len(wav) / sr:.2f}",
         })
+
+    def render_long(job, req: LongTTSRequest, kind: str = "long", extra: dict | None = None) -> dict:
+        """Génère un texte long phrase par phrase (tâche de fond) ; chaque phrase reste régénérable."""
+        from . import longform
+
+        voice = voices.get(req.voice_id)
+        segments = longform.parse(req.text)
+        texts = [i for i, sg in enumerate(segments) if sg["type"] == "text"]
+        if not texts:
+            raise ValueError("Aucun texte à lire.")
+        job.update(0.0, "Chargement du modèle…")
+        engine = manager.get(req.model_id, "tts")
+        wavs: dict[int, np.ndarray] = {}
+        sr = 24000
+        t0 = time.time()
+        for n, i in enumerate(texts, 1):
+            job.update((n - 1) / len(texts), f"Phrase {n}/{len(texts)}")
+            with manager.infer_lock:
+                wav, sr = engine.tts(segments[i]["text"], voice, req.language, **req.params)
+            wavs[i] = wav
+        full = longform.assemble([(sg, wavs.get(i)) for i, sg in enumerate(segments)], sr)
+        item = history.add(full, sr, kind=kind, model_id=req.model_id, voice_id=voice.id, voice_name=voice.name,
+                           params=req.params, text=req.text[:500], language=req.language,
+                           seconds=round(time.time() - t0, 2), title=req.title or None, **(extra or {}))
+        parts = history.parts_dir(item["id"])
+        parts.mkdir(parents=True, exist_ok=True)
+        for i, wav in wavs.items():
+            audio.save_wav(parts / f"{i:04d}.wav", wav, sr)
+            segments[i]["file"] = f"{i:04d}.wav"
+            segments[i]["duration"] = round(len(wav) / sr, 2)
+        history.set_meta(item["id"], segments=segments, sample_rate=sr)
+        return {"history_id": item["id"], "duration": item["duration"]}
+
+    @app.post("/api/tts/long")
+    def tts_long(req: LongTTSRequest):
+        """Texte long (ou avec des [pause]) : tâche de fond avec progression ; voir /api/jobs/{id}."""
+        voices.get(req.voice_id)
+        get_model(req.model_id)
+        title = req.title or (req.text[:40] + ("…" if len(req.text) > 40 else ""))
+        return jobs.submit("tts", title, lambda job: render_long(job, req)).to_dict()
+
+    @app.get("/api/history/{item_id}/segments/{index}/audio")
+    def segment_audio(item_id: str, index: int):
+        path = history.parts_dir(item_id) / f"{index:04d}.wav"
+        if not path.exists():
+            raise KeyError("Phrase introuvable")
+        return FileResponse(path, media_type="audio/wav")
+
+    @app.post("/api/history/{item_id}/segments/{index}")
+    def regenerate_segment(item_id: str, index: int, body: SegmentRegen):
+        """Régénère une seule phrase (texte éventuellement corrigé) puis recolle l'ensemble."""
+        from . import longform
+
+        item = history.get(item_id)
+        segments = item.get("segments") or []
+        if not (0 <= index < len(segments)) or segments[index]["type"] != "text":
+            raise KeyError("Phrase introuvable")
+        voice = voices.get(item["voice_id"])
+        engine = manager.get(item["model_id"], "tts")
+        text = (body.text or segments[index]["text"]).strip()
+        params = body.params if body.params is not None else item.get("params") or {}
+        with manager.infer_lock:
+            wav, sr = engine.tts(text, voice, item.get("language", "fr"), **params)
+        parts = history.parts_dir(item_id)
+        target_sr = item.get("sample_rate", sr)
+        if sr != target_sr:
+            wav = audio.resample(wav, sr, target_sr)
+        audio.save_wav(parts / f"{index:04d}.wav", wav, target_sr)
+        segments[index].update(text=text, file=f"{index:04d}.wav", duration=round(len(wav) / target_sr, 2),
+                               regenerated=segments[index].get("regenerated", 0) + 1)
+        loaded = [(sg, audio.load_audio(parts / sg["file"])[0] if sg.get("file") else None) for sg in segments]
+        full = longform.assemble(loaded, target_sr)
+        return history.replace_audio(item_id, full, target_sr, segments=segments,
+                                     text=" ".join(sg.get("text", "") for sg in segments if sg["type"] == "text")[:500])
+
+    # ------------------------------------------------------------ livres audio
+    from .books import BookStore, build_zip, parse_upload, write_chapter
+
+    books = BookStore()
+
+    @app.post("/api/books/parse")
+    async def book_parse(file: UploadFile = File(...)):
+        """Découpe un .txt / .md / .epub en chapitres (à relire avant de lancer la génération)."""
+        data = await read_upload(file)
+        try:
+            return parse_upload(file.filename or "livre.txt", data)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/books")
+    def book_create(req: BookRequest):
+        from . import longform
+
+        voice = voices.get(req.voice_id)
+        get_model(req.model_id)
+        book_id = books.new_id()
+        meta = {"id": book_id, "title": req.title, "created_at": time.time(), "model_id": req.model_id,
+                "voice_id": voice.id, "voice_name": voice.name, "language": req.language, "state": "queued",
+                "chapters": [{"title": c.title or f"Chapitre {i}", "chars": len(c.text)}
+                             for i, c in enumerate(req.chapters, 1)]}
+        books.save(book_id, meta)
+
+        def work(job):
+            engine = manager.get(req.model_id, "tts")
+            plans = []
+            for c in req.chapters:
+                head = f"{c.title}. [pause 1s]\n\n" if req.announce_titles and c.title else ""
+                plans.append(longform.parse(head + c.text))
+            total = sum(1 for p in plans for sg in p if sg["type"] == "text") or 1
+            done = 0
+            meta["state"] = "running"
+            t0 = time.time()
+            for ci, (plan, ch) in enumerate(zip(plans, meta["chapters"])):
+                wavs, sr = {}, 24000
+                for i, sg in enumerate(plan):
+                    if sg["type"] != "text":
+                        continue
+                    job.update(done / total, f"Chapitre {ci + 1}/{len(plans)} · phrase {done + 1}/{total}")
+                    with manager.infer_lock:
+                        wavs[i], sr = engine.tts(sg["text"], voice, req.language, **req.params)
+                    done += 1
+                full = longform.assemble([(sg, wavs.get(i)) for i, sg in enumerate(plan)], sr)
+                if settings.get("watermark"):
+                    from . import watermark
+
+                    full = watermark.embed(full, sr)
+                path = write_chapter(books.root / book_id / f"{ci + 1:03d}", full, sr, req.format)
+                ch.update(file=path.name, duration=round(len(full) / sr, 2))
+                books.save(book_id, meta)
+            meta["zip"] = build_zip(books.root / book_id, meta)
+            meta.update(state="done", seconds=round(time.time() - t0, 1),
+                        duration=round(sum(c.get("duration", 0) for c in meta["chapters"]), 1))
+            books.save(book_id, meta)
+            return {"book_id": book_id, "duration": meta["duration"]}
+
+        def guarded(job):
+            try:
+                return work(job)
+            except BaseException as exc:
+                meta["state"] = "cancelled" if job.cancelled else "error"
+                meta["error"] = str(exc) or type(exc).__name__
+                books.save(book_id, meta)
+                raise
+
+        job = jobs.submit("book", f"📚 {req.title}", guarded)
+        meta["job_id"] = job.id
+        books.save(book_id, meta)
+        return {"book": meta, "job": job.to_dict()}
+
+    def book_state(meta: dict) -> dict:
+        if meta.get("state") in ("queued", "running") and meta.get("job_id"):
+            try:
+                job = jobs.get(meta["job_id"])
+                meta["progress"] = job.progress
+                if job.state in ("cancelled", "error"):
+                    meta["state"] = job.state
+            except KeyError:  # serveur redémarré pendant la génération
+                meta["state"] = "error"
+                meta["error"] = "Génération interrompue (redémarrage du serveur)."
+        return meta
+
+    @app.get("/api/books")
+    def book_list():
+        return [book_state(b) for b in books.list()]
+
+    @app.get("/api/books/{book_id}")
+    def book_get(book_id: str):
+        return book_state(books.get(book_id))
+
+    @app.get("/api/books/{book_id}/chapters/{index}")
+    def book_chapter(book_id: str, index: int):
+        path = books.chapter_path(book_id, index)
+        return FileResponse(path, media_type="audio/mpeg" if path.suffix == ".mp3" else "audio/wav",
+                            filename=path.name)
+
+    @app.get("/api/books/{book_id}/zip")
+    def book_zip(book_id: str):
+        path = books.zip_path(book_id)
+        return FileResponse(path, media_type="application/zip", filename=path.name)
+
+    @app.delete("/api/books/{book_id}")
+    def book_delete(book_id: str):
+        meta = books.get(book_id)
+        if meta.get("job_id") and meta.get("state") in ("queued", "running"):
+            try:
+                jobs.cancel(meta["job_id"])
+            except KeyError:
+                pass
+        books.delete(book_id)
+        return {"ok": True}
+
+    # ------------------------------------------------------------ entraînement
+    @app.get("/api/training/models")
+    def trained_models():
+        return training.list_custom_models()
+
+    @app.delete("/api/training/models/{model_id}")
+    def delete_trained_model(model_id: str):
+        manager.unload(model_id)
+        training.delete_custom_model(model_id)
+        return {"ok": True}
+
+    @app.post("/api/training/xtts")
+    def train_xtts(body: XTTSTrainRequest):
+        """Affine XTTS v2 sur une voix (tâche de fond, plusieurs dizaines de minutes sur GPU)."""
+        voice = voices.get(body.voice_id)
+        return jobs.submit("train", f"🎓 XTTS · {voice.name}", lambda job: training.finetune_xtts(
+            job, manager, voices, body.voice_id, body.epochs, body.batch_size, body.grad_accum,
+            body.asr_model_id, body.language, body.name)).to_dict()
+
+    @app.post("/api/training/rvc")
+    def train_rvc(body: RVCTrainRequest):
+        """Entraîne un modèle RVC de la voix avec Applio (installé à part)."""
+        voice = voices.get(body.voice_id)
+        if body.sample_rate not in (32000, 40000, 48000):
+            raise HTTPException(400, "Fréquence : 32000, 40000 ou 48000.")
+        try:
+            training.applio_paths()
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return jobs.submit("train", f"🎓 RVC · {voice.name}", lambda job: training.train_rvc(
+            job, manager, voices, body.voice_id, body.epochs, body.batch_size, body.sample_rate,
+            body.save_every)).to_dict()
+
+    @app.post("/api/voices/{voice_id}/rvc")
+    async def upload_rvc(voice_id: str, pth: UploadFile = File(...), index: UploadFile | None = File(None),
+                         version: str = Form("v2")):
+        """Attache un modèle RVC existant (.pth et .index facultatif) à la voix."""
+        if not (pth.filename or "").lower().endswith(".pth"):
+            raise HTTPException(400, "Le modèle doit être un fichier .pth")
+        idx = await index.read() if index is not None and index.filename else None
+        try:
+            voice = training.attach_rvc(voices, voice_id, await pth.read(), idx, version, f"import : {pth.filename}")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return voice.to_dict()
+
+    @app.delete("/api/voices/{voice_id}/rvc")
+    def delete_rvc(voice_id: str):
+        return training.detach_rvc(voices, voice_id).to_dict()
+
+    # ------------------------------------------------------------ filigrane
+    @app.post("/api/watermark/detect")
+    async def watermark_detect(file: UploadFile = File(...)):
+        from starlette.concurrency import run_in_threadpool
+
+        from . import watermark
+
+        data = await read_upload(file)
+
+        def work():
+            x, sr = audio.load_audio(data)
+            return watermark.detect(x, sr)
+
+        return await run_in_threadpool(work)
 
     # ----------------------------------------------------- speech-to-speech
     @app.post("/api/vc")
@@ -345,11 +761,13 @@ def create_app() -> FastAPI:
         file: UploadFile = File(...),
         model_id: str = Form(...),
         voice_id: str = Form(...),
-        mode: str = Form("vc"),  # vc | asr_tts
+        mode: str = Form("vc"),  # vc | asr_tts | translate
         asr_model_id: str = Form(""),
         language: str = Form("fr"),
         source_voice_id: str = Form(""),
         params: str = Form("{}"),
+        target_language: str = Form(""),
+        mt_model_id: str = Form(""),
     ):
         import json
 
@@ -362,8 +780,21 @@ def create_app() -> FastAPI:
             voice = voices.get(voice_id)
             x, sr = audio.load_audio(data)
             t0 = time.time()
-            text = None
-            if mode == "asr_tts":
+            text = translated = None
+            if mode == "translate":
+                from .translation import speech_to_translated_text
+
+                if not asr_model_id or not target_language:
+                    raise HTTPException(400, "Choisissez un modèle de transcription et la langue d'arrivée.")
+                asr = manager.get(asr_model_id, "asr")
+                tts_engine = manager.get(model_id, "tts")
+                text, translated = speech_to_translated_text(manager, asr, x, sr, language, target_language,
+                                                             mt_model_id or None)
+                if not translated:
+                    raise HTTPException(400, "Aucune parole détectée dans l'audio.")
+                with manager.infer_lock:
+                    wav, out_sr = tts_engine.tts(translated, voice, target_language, **extra)
+            elif mode == "asr_tts":
                 if not asr_model_id:
                     raise HTTPException(400, "Choisissez un modèle de transcription.")
                 asr = manager.get(asr_model_id, "asr")
@@ -380,24 +811,40 @@ def create_app() -> FastAPI:
                     extra["source_voice"] = voices.get(source_voice_id)
                 with manager.infer_lock:
                     wav, out_sr = engine.convert(x, sr, voice, **extra)
-            return wav, out_sr, text, time.time() - t0, voice
+            return wav, out_sr, text, translated, time.time() - t0, voice
 
-        wav, sr, text, elapsed, voice = await run_in_threadpool(work)
-        item = history.add(wav, sr, kind="s2s", mode=mode, model_id=model_id, voice_id=voice.id,
-                           voice_name=voice.name, text=(text or "")[:500], seconds=round(elapsed, 2))
+        wav, sr, text, translated, elapsed, voice = await run_in_threadpool(work)
+        item = history.add(wav, sr, kind="translate" if mode == "translate" else "s2s", mode=mode,
+                           model_id=model_id, voice_id=voice.id, voice_name=voice.name,
+                           text=(translated or text or "")[:500], source_text=(text or "")[:500] if translated else None,
+                           language=target_language or language, seconds=round(elapsed, 2))
         headers = {"X-History-Id": item["id"], "X-Generation-Seconds": f"{elapsed:.2f}"}
         if text:
             headers["X-Transcript"] = quote(text[:500])
-        return Response(audio.to_wav_bytes(wav, sr), media_type="audio/wav", headers=headers)
+        if translated:
+            headers["X-Translation"] = quote(translated[:500])
+        return Response(history.path(item["id"]).read_bytes(), media_type="audio/wav", headers=headers)
 
     # ------------------------------------------------------------ historique
     @app.get("/api/history")
     def list_history(limit: int = 50):
         return history.list(limit)
 
+    @app.get("/api/history/{item_id}")
+    def get_history(item_id: str):
+        return history.get(item_id)
+
     @app.get("/api/history/{item_id}/audio")
-    def history_audio(item_id: str):
-        return FileResponse(history.path(item_id), media_type="audio/wav", filename=f"voiceclone-{item_id}.wav")
+    def history_audio(item_id: str, format: str = "wav"):
+        path = history.path(item_id)
+        if format == "mp3":
+            return Response(audio.encode_mp3(path), media_type="audio/mpeg",
+                            headers={"Content-Disposition": f'attachment; filename="voiceclone-{item_id}.mp3"'})
+        return FileResponse(path, media_type="audio/wav", filename=f"voiceclone-{item_id}.wav")
+
+    @app.patch("/api/history/{item_id}")
+    def update_history(item_id: str, body: HistoryUpdate):
+        return history.update(item_id, **body.model_dump(exclude_none=True))
 
     @app.delete("/api/history/{item_id}")
     def delete_history(item_id: str):
@@ -428,6 +875,33 @@ def create_app() -> FastAPI:
     def rt_status():
         return live.status()
 
+    @app.post("/api/realtime/say")
+    def rt_say(body: SayRequest):
+        """Fait dire un texte au Live en cours (lancé depuis le serveur ou depuis un navigateur)."""
+        session = active_session()
+        if session is None:
+            raise HTTPException(409, "Aucun Live en cours : démarrez-le dans l'onglet Live / Discord.")
+        try:
+            session.say(body.text)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True}
+
+    @app.get("/api/overlay")
+    def overlay(lines: int = 3):
+        """État résumé du Live pour la page OBS (sous-titres, indicateur de parole)."""
+        session = active_session()
+        if session is None:
+            return {"active": False, "speaking": False, "lines": []}
+        st = session.status()
+        voice = getattr(session, "voice", None)
+        recent = [t for t in st["transcripts"] if time.time() - t.get("at", 0) < 60][-max(1, min(lines, 10)):]
+        return {"active": True, "mode": st["config"]["mode"] if st["config"] else None,
+                "voice": voice.name if voice else None, "speaking": bool(st["output_db"] > -45),
+                "output_db": float(st["output_db"]), "input_db": float(st["input_db"]),
+                "lines": [{"text": t["text"], "translation": t.get("translation"), "typed": bool(t.get("typed")),
+                           "at": t["at"]} for t in recent]}
+
     @app.websocket("/api/realtime/ws")
     async def rt_browser(ws: WebSocket):
         """Live via le navigateur : micro du PC -> serveur (GPU) -> sortie choisie dans le navigateur.
@@ -457,28 +931,58 @@ def create_app() -> FastAPI:
                 if session is not None:
                     outbox.put_nowait({"type": "status", **session.status()})
 
+        async def handle_control(sess, ctrl: dict, box: asyncio.Queue):
+            kind = ctrl.get("type")
+            if kind == "silence":  # micro coupé / porte de bruit : du silence sans le transmettre
+                sess.feed(np.zeros(max(0, min(int(ctrl.get("n", 0)), sess.in_sr)), dtype=np.float32))
+            elif kind == "ping":  # mesure de l'aller-retour réseau par le navigateur
+                box.put_nowait({"type": "pong", "t": ctrl.get("t")})
+            elif kind == "say":
+                try:
+                    sess.say(ctrl.get("text", ""))
+                except Exception as exc:
+                    box.put_nowait({"type": "notice", "detail": str(exc)})
+
         tasks = [asyncio.create_task(sender())]
         try:
             raw = await ws.receive_json()
             in_sr = int(raw.pop("sample_rate", 48000))
+            # Opus si le navigateur le propose, que PyAV est installé et que la fréquence s'y prête
+            use_opus = raw.pop("codec", "pcm") == "opus" and opus.available() and in_sr in opus.OPUS_RATES
+            decoder = opus.OpusDecoder(in_sr) if use_opus else None
+            encoder = opus.OpusEncoder(48000) if use_opus else None
+
+            def on_audio(y: np.ndarray) -> None:  # appelé depuis le thread de traitement
+                if encoder is not None:
+                    for packet in encoder.encode(y):
+                        loop.call_soon_threadsafe(outbox.put_nowait, packet)
+                else:
+                    loop.call_soon_threadsafe(outbox.put_nowait, (y * 32767).astype("<i2").tobytes())
+
             fields = set(RealtimeStart.model_fields) - {"input_device", "output_device", "monitor_device"}
             cfg = RealtimeConfig(**RealtimeStart(**{k: v for k, v in raw.items() if k in fields}).model_dump(
                 exclude={"input_device", "output_device", "monitor_device"}))
-            session = BrowserRealtimeSession(
-                manager, voices, in_sr, on_audio=lambda pcm: loop.call_soon_threadsafe(outbox.put_nowait, pcm))
+            session = BrowserRealtimeSession(manager, voices, in_sr, on_audio=on_audio,
+                                             out_sr=48000 if use_opus else None)
             outbox.put_nowait({"type": "loading"})
             await run_in_threadpool(session.start, cfg)  # charge les modèles (peut être long la 1re fois)
-            outbox.put_nowait({"type": "started", "out_sample_rate": session.out_sr})
+            browser_sessions.append(session)
+            outbox.put_nowait({"type": "started", "out_sample_rate": session.out_sr,
+                               "codec": "opus" if use_opus else "pcm"})
             tasks.append(asyncio.create_task(status_pump()))
             while True:
                 msg = await ws.receive()
                 if msg["type"] == "websocket.disconnect":
                     break
                 if msg.get("bytes"):
-                    pcm = np.frombuffer(msg["bytes"], dtype="<i2").astype(np.float32) / 32768.0
-                    session.feed(pcm)
+                    if decoder is not None:
+                        session.feed(decoder.decode(msg["bytes"]))
+                    else:
+                        session.feed(np.frombuffer(msg["bytes"], dtype="<i2").astype(np.float32) / 32768.0)
                 elif msg.get("text") == "stop":
                     break
+                elif msg.get("text"):
+                    await handle_control(session, json.loads(msg["text"]), outbox)
         except WebSocketDisconnect:
             pass
         except Exception as exc:  # erreur de config / modèle : on la renvoie au navigateur
@@ -489,6 +993,8 @@ def create_app() -> FastAPI:
             for t in tasks:
                 t.cancel()
             if session is not None:
+                if session in browser_sessions:
+                    browser_sessions.remove(session)
                 await run_in_threadpool(session.stop)
             try:
                 await ws.close()
@@ -496,7 +1002,13 @@ def create_app() -> FastAPI:
                 pass
 
     # ------------------------------------------------------------ interface
+    @app.get("/api/auth")
+    def auth_state():
+        return {"protected": bool(auth.password())}
+
     if config.WEB_DIR.exists():
         app.mount("/", StaticFiles(directory=str(config.WEB_DIR), html=True), name="web")
 
+    if auth.password():  # protège interface, API et WebSocket
+        app.add_middleware(auth.AuthMiddleware, pw=auth.password())
     return app

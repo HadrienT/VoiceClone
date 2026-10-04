@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from voiceclone import audio, config  # noqa: E402
 from voiceclone.prep import auto_prepare, split  # noqa: E402
-from voiceclone.voices import VoiceStore  # noqa: E402
+from voiceclone.voices import VoiceStore, consent_record  # noqa: E402
 
 
 def find_voice(store: VoiceStore, key: str):
@@ -74,7 +74,7 @@ def main() -> None:
         if not args.consent:
             p.error("--create demande --consent (votre voix, ou accord explicite de la personne)")
         files = ([Path(args.voice)] if args.voice else []) + args.files  # pas de voix existante à nommer
-        voice = store.create(args.create, args.lang)
+        voice = store.create(args.create, args.lang, consent=consent_record("self", "cli"))
         print(f"Voix créée : {voice.name!r} (id={voice.id})")
     else:
         files = args.files

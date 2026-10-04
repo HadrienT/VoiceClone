@@ -26,3 +26,9 @@ class FakeEngine(Engine):
 
     def transcribe(self, wav, sr, language=None):
         return "bonjour tout le monde"
+
+    def translate(self, text, src, tgt):
+        return f"[{tgt}] {text}"
+
+    def translate_speech(self, wav, sr, language=None):
+        return "hello everyone"

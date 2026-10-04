@@ -29,7 +29,13 @@ class WhisperEngine(Engine):
             text = self._run(x, lang, vad=False)
         return text
 
-    def _run(self, x: np.ndarray, lang: str | None, vad: bool) -> str:
-        segments, _ = self.model.transcribe(x, language=lang, beam_size=1, vad_filter=vad,
+    def translate_speech(self, wav: np.ndarray, sr: int, language: str | None = None) -> str:
+        """Traduction directe vers l'anglais par Whisper (sans modèle de traduction séparé)."""
+        x = audio.resample(wav, sr, 16000)
+        lang = None if not language or language == "auto" else language.split("-")[0]
+        return self._run(x, lang, vad=False, task="translate")
+
+    def _run(self, x: np.ndarray, lang: str | None, vad: bool, task: str = "transcribe") -> str:
+        segments, _ = self.model.transcribe(x, language=lang, beam_size=1, vad_filter=vad, task=task,
                                             condition_on_previous_text=False)
         return " ".join(s.text.strip() for s in segments).strip()

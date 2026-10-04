@@ -84,7 +84,7 @@ def rms_db(x: np.ndarray) -> float:
     if len(x) == 0:
         return -120.0
     rms = float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
-    return 20.0 * np.log10(max(rms, 1e-6))
+    return float(20.0 * np.log10(max(rms, 1e-6)))
 
 
 def frame_rms_db(x: np.ndarray, sr: int, frame_ms: float = 30.0) -> np.ndarray:
@@ -195,3 +195,16 @@ def crossfade_concat(chunks: list[np.ndarray], sr: int, fade_ms: float = 20.0) -
         else:
             out = np.concatenate([out, c])
     return out
+
+
+def encode_mp3(src: str | Path, bitrate: str = "192k") -> bytes:
+    """Encode un fichier audio en MP3 avec ffmpeg."""
+    if shutil.which("ffmpeg") is None:
+        raise AudioError("Export MP3 impossible : ffmpeg est introuvable sur le serveur.")
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(src), "-f", "mp3", "-b:a", bitrate, "pipe:1"],
+        capture_output=True, check=False,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        raise AudioError(f"Échec de l'encodage MP3 : {proc.stderr.decode(errors='ignore')[:300]}")
+    return proc.stdout

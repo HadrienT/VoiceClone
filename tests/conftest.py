@@ -22,7 +22,7 @@ def tmp_data(tmp_path, monkeypatch):
 @pytest.fixture
 def fake_model(tmp_data):
     spec = ModelSpec(
-        id="fake", name="Fake", description="test", capabilities=("tts", "vc", "asr"),
+        id="fake", name="Fake", description="test", capabilities=("tts", "vc", "asr", "mt"),
         engine="tests.fake_engine:FakeEngine", repos=(registry.HFRepo("org/fake"),),
         packages=("numpy",), pip="-", languages=("fr", "en"),
     )
