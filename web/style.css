@@ -314,3 +314,17 @@ dialog.trimmer::backdrop { background: #0008; }
 .book { margin-bottom: 10px; }
 @media (max-width: 700px) { .chapter-list li { flex-wrap: wrap; } .chapter-list li > input[data-ch-title] { max-width: none; width: 100%; } }
 .mix-card summary { cursor: pointer; }
+
+/* Petits écrans : rien ne doit élargir la page */
+.app > main { min-width: 0; }
+.grid { grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
+.grid2 { grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
+.field, .field select, .field input, .field textarea { max-width: 100%; min-width: 0; }
+.grow { min-width: 0; }
+#obs-url { word-break: break-all; white-space: normal; }
+@media (max-width: 600px) {
+  main { padding: 20px 16px; }
+  .card { padding: 14px; }
+  .row > .field { flex: 1 1 100%; }
+  .page-head h1 { font-size: 22px; }
+}

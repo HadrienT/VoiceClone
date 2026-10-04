@@ -64,3 +64,22 @@ Légende : effort **S** (quelques heures) · **M** (une journée) · **L** (plus
 | 7.2 | RVC : inférence de modèles .pth/.index + entraînement via Applio | L | ⚠ |
 | 7.3 | Fine-tuning XTTS (jeu de données automatique, entraînement en tâche de fond, modèle fine-tuné sélectionnable) | L | ⚠ |
 | 7.4 | Isolation des moteurs : un processus (et un Python/venv au choix) par modèle | L | ⚠ |
+
+## À valider sur le serveur (éléments ⚠)
+
+Tout le reste est couvert par `pytest` (78 tests) et vérifié dans Chromium avec un moteur factice.
+Commencez par `git pull`, relancez le serveur, puis **Ctrl+F5** dans le navigateur.
+
+| # | Comment vérifier | En cas de problème |
+|---|---|---|
+| 2.4 | Live en conversion directe : la voix doit être continue, sans « clics » aux jointures. La latence estimée s'affiche. | Augmenter « Fondu » / « Contexte » dans les réglages avancés |
+| 3.2 | Diagnostic : la VRAM de chaque GPU et la mémoire de chaque modèle chargé s'affichent ; avec « Nombre maximal » = 1, charger un 2e modèle décharge le 1er. | Journal du serveur (Diagnostic) |
+| 3.5 | `python scripts/install.py --list` ; `docker compose build` (non testé ici : réseau du bac à sable bloqué). | |
+| 5.3 | `pip install deepfilternet` puis import intelligent avec « DeepFilterNet » ; `pip install demucs` pour « Demucs ». Le rapport indique la méthode utilisée ou le repli. | Repli spectral automatique |
+| 6.1 | Télécharger « Opus-MT fr→en » (`pip install transformers sentencepiece`), Voix → Voix, mode Traduction. | |
+| 6.3 | Mélanger deux voix puis générer avec XTTS / OpenVoice / Chatterbox. | Supprimer le cache : bouton Préparer |
+| 6.4 | Ouvrir `obs.html` pendant un Live ; `python integrations/twitch_tts.py --channel <chaîne>` ; bot Discord : `/mavoix`, `/file`, `/lire`. | |
+| 7.1 | Seed-VC : `python scripts/install.py --isolated seed-vc`, télécharger, tester en Voix → Voix puis en Live (4-8 étapes). | `python scripts/smoke_test.py --models seed-vc` |
+| 7.2 | RVC : `python scripts/install.py --isolated rvc`, télécharger, importer un .pth sur une voix (onglet Entraînement), convertir. Applio : renseigner son dossier dans Diagnostic. | |
+| 7.3 | Affiner XTTS (2-10 min d'audio transcrit, 10 époques) : un modèle « XTTS · voix » apparaît dans Texte → Voix. | Journal + `data/training/*/train.log` |
+| 7.4 | Diagnostic → Réglages → Isolation : renseigner un Python ; le modèle se charge dans un processus séparé. | |

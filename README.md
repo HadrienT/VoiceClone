@@ -2,13 +2,19 @@
 
 Studio **local** de clonage de voix basé sur des modèles **open source**, avec une interface web :
 
-- 📦 **Catalogue de modèles** : choisissez un modèle et téléchargez-le depuis Hugging Face en un clic (barre de progression, suppression, chargement/déchargement de la mémoire GPU).
-- 🧬 **Création de voix** : glissez-déposez une ou plusieurs pistes audio **ou enregistrez-vous en direct** depuis le navigateur (texte à lire proposé, vumètre, analyse de qualité). Le bouton « Entraîner » pré-calcule l'empreinte vocale pour un modèle.
-- 💬 **Texte → Voix (TTS)** dans la voix clonée.
-- 🔁 **Voix → Voix (S2S)** : conversion d'un fichier ou d'un enregistrement.
-- 🔴 **Live / Discord** : votre micro est converti en temps réel et envoyé vers un câble audio virtuel que Discord utilise comme micro.
-- 🤖 **Bot Discord** optionnel (`/say`) pour faire parler une voix clonée dans un salon.
-- 🕘 Historique des générations.
+- 📦 **Catalogue de modèles** : choisissez un modèle et téléchargez-le depuis Hugging Face en un clic (progression, suppression, chargement / déchargement de la mémoire GPU).
+- 🧬 **Création de voix** : glissez-déposez des pistes audio, **enregistrez-vous** depuis le navigateur ou **capturez le son du PC**. ✂ Forme d'onde pour couper avant l'import, ✨ **import intelligent** (nettoyage, découpe, sélection des meilleurs passages ; DeepFilterNet / Demucs en option), ordre des échantillons, transcription Whisper, 🎛 **mélange de voix**.
+- 💬 **Texte → Voix** : réglages mémorisés par voix, ⚖ comparateur de modèles, **textes longs** générés phrase par phrase (pauses `[pause 1s]`, chaque phrase corrigeable seule).
+- 📚 **Livre audio** : texte, `.txt`, `.md` ou `.epub` → un MP3 par chapitre + archive ZIP.
+- 🔁 **Voix → Voix** : conversion d'un fichier ou d'un enregistrement, et 🌍 **traduction vocale** (vous parlez français, votre voix clonée parle anglais).
+- 🔴 **Live / Discord** : votre micro converti en temps réel vers un câble audio virtuel (Discord, OBS…). Appuyer pour parler, porte de bruit, compression Opus, reconnexion auto, texte tapé dit par la voix clonée, traduction en direct, page de sous-titres pour OBS, lecture du chat Twitch.
+- 🎓 **Entraînement** : affiner XTTS sur votre voix, modèles RVC (import ou entraînement via Applio).
+- 🤖 **Bot Discord** : file d'attente, une voix par membre, lecture d'un salon textuel.
+- 🩺 **Diagnostic** : GPU et mémoire, versions, journal du serveur, réglages (déchargement automatique, filigrane, isolation des moteurs).
+- 🔐 Mot de passe optionnel, consentement enregistré avec chaque voix, filigrane inaudible et détecteur.
+- 🕘 Historique (favoris, filtres, MP3, régénérer).
+
+Le détail des fonctions et de ce qui reste à valider sur un vrai GPU est dans [WORKPLAN.md](WORKPLAN.md).
 
 > ⚠️ Ne clonez que votre propre voix ou celle d'une personne qui vous a donné son accord explicite. Usurper l'identité de quelqu'un est illégal dans la plupart des pays.
 
@@ -23,9 +29,13 @@ Studio **local** de clonage de voix basé sur des modèles **open source**, avec
 | **Chatterbox (EN) + VC** | TTS anglais + conversion de voix | VC : ✅ | ✅ | MIT | 3,0 Go |
 | **OpenVoice V2** | Conversion de voix (très rapide) | ✅ | ✅ | MIT | 130 Mo |
 | **F5-TTS v1** | TTS | ❌ (EN/ZH) | – | CC-BY-NC | 1,4 Go |
+| **Seed-VC** | Conversion de voix (diffusion, haute fidélité) | ✅ | ✅ (4-8 étapes) | GPL-3.0 (code) | 1,6 Go |
+| **RVC** | Conversion avec un modèle entraîné par voix | ✅ | ✅ | MIT | 370 Mo + modèle |
 | **Whisper small / large-v3-turbo** | Transcription | ✅ | ✅ | MIT | 0,5 / 1,6 Go |
+| **Opus-MT fr→en / en→fr** | Traduction | ✅ | ✅ | CC-BY | 300 Mo |
+| **NLLB-200 600M** | Traduction (200 langues) | ✅ | – | CC-BY-NC | 2,5 Go |
 
-Tous sont **zero-shot** : 10 à 30 s de voix suffisent, pas besoin d'un long entraînement GPU. L'« entraînement » dans l'interface calcule et met en cache l'empreinte vocale (latents XTTS, conditionnements Chatterbox, embedding OpenVoice) pour des générations plus rapides.
+Tous les modèles de voix sauf RVC sont **zero-shot** : 10 à 30 s de voix suffisent. Le bouton « Préparer » d'une voix calcule et met en cache son empreinte (latents XTTS, conditionnements Chatterbox, timbre OpenVoice, référence Seed-VC) pour des générations plus rapides. Pour aller plus loin, l'onglet **Entraînement** affine XTTS sur votre voix ou produit un modèle RVC.
 
 Ajouter un modèle = une entrée dans `voiceclone/registry.py` + une classe dans `voiceclone/engines/`.
 
@@ -65,7 +75,24 @@ pip install chatterbox-tts 'setuptools<81'   # Chatterbox (TTS multilingue + VC)
 pip install f5-tts                    # F5-TTS
 ```
 
-> 💡 Ces paquets épinglent parfois des versions différentes de `torch`/`transformers`. Si vous rencontrez un conflit, créez un environnement virtuel par moteur (ou commencez par **XTTS + Whisper + OpenVoice**, combo qui couvre TTS, S2S et live en français). Après une installation pip, **relancez le serveur**.
+Ou avec le script d'installation (lit les commandes du catalogue) :
+
+```bash
+python scripts/install.py --list                         # modèles et état des dépendances
+python scripts/install.py --torch cu124 xtts-v2 whisper-small openvoice-v2
+python scripts/install.py --isolated rvc                 # venv dédié data/envs/rvc + réglage automatique
+```
+
+> 💡 Ces paquets épinglent parfois des versions incompatibles de `torch`/`transformers`/`numpy` (RVC, Seed-VC surtout). `--isolated` installe un modèle dans son propre environnement : VoiceClone le fait alors tourner dans un processus séparé (réglable aussi dans **Diagnostic → Réglages → Isolation**). Commencez par **XTTS + Whisper + OpenVoice**, combo qui couvre TTS, S2S et live en français. Après une installation pip, **relancez le serveur**.
+
+Optionnels : `pip install av` (compression Opus du Live), `pip install deepfilternet` / `pip install demucs` (nettoyage avancé à l'import), `pip install transformers sentencepiece` (traduction).
+
+### Docker
+
+```bash
+docker compose up -d          # GPU NVIDIA (NVIDIA Container Toolkit) ; données dans ./data
+# ou : docker build -t voiceclone --build-arg TORCH=cpu --build-arg MODELS="whisper-small openvoice-v2" .
+```
 
 ### 3. Audio temps réel
 
@@ -110,7 +137,7 @@ L'onglet **Live / Discord**, en mode « Audio de ce PC » (par défaut), capte l
 ## Utilisation
 
 1. **Modèles** → *Télécharger* (ex. XTTS v2 et OpenVoice V2). Optionnel : *Charger en mémoire* pour éviter l'attente à la première génération.
-2. **Mes voix** → donnez un nom, glissez vos fichiers ou cliquez **● Enregistrer** et lisez le texte proposé (2-3 prises de 10 s). Cochez le consentement → *Créer la voix*. Vérifiez les avertissements qualité (bruit, saturation…), puis *🧬 Entraîner* pour le modèle choisi.
+2. **Mes voix** → donnez un nom, glissez vos fichiers ou cliquez **● Enregistrer** et lisez le texte proposé (2-3 prises de 10 s). Cochez le consentement → *Créer la voix*. Vérifiez les avertissements qualité (bruit, saturation…), puis *🧬 Préparer* pour le modèle choisi.
 3. **Texte → Voix** : choisissez modèle, voix, langue, tapez le texte → *Générer*.
 4. **Voix → Voix** : *Conversion directe* (garde votre intonation) ou *Transcription + TTS* (re-synthèse totale).
 
@@ -184,6 +211,22 @@ Votre micro ──► VoiceClone (modèle) ──► câble virtuel ──► Di
 
 Réglages : taille des morceaux (plus petit = moins de latence mais plus d'artefacts), contexte, seuil de silence (le silence n'est pas envoyé au modèle), gains. Si « morceaux sautés » augmente, le GPU ne suit pas : augmentez la taille des morceaux ou prenez OpenVoice.
 
+### Texte tapé, appuyer pour parler, Opus
+
+- **💬 Dire dans le Live** : tapez une phrase (ou cliquez une phrase favorite) : elle est dite par la voix clonée et mêlée au flux envoyé à Discord. Choisissez le modèle de synthèse à côté (XTTS conseillé).
+- **🎙 Micro** : toujours actif, **appuyer pour parler** (touche au choix, l'onglet doit avoir le focus) ou coupé ; **Ctrl+M** bascule le micro. La **porte de bruit** n'envoie rien sous le seuil choisi.
+- **Compression Opus** : le flux navigateur ↔ serveur passe de ~770 kbit/s à ~30 kbit/s (utile via un tunnel SSH) ; nécessite `pip install av` sur le serveur, sinon repli PCM automatique. Coupure réseau : reconnexion automatique (5 essais).
+- **Latence estimée** et aller-retour réseau sont affichés pendant le Live.
+
+### 🌍 Traduction vocale
+
+En **Voix → Voix**, mode *Traduction* : choisissez la langue parlée et la langue d'arrivée. En **Live**, mode *Transcription + TTS*, champ *Traduire vers*. Il faut un modèle de traduction (Opus-MT pour fr↔en, NLLB-200 pour les autres langues) ; vers l'anglais, Whisper sait aussi traduire seul.
+
+### 🎬 OBS et Twitch
+
+- **Sous-titres / indicateur de parole** : *Source navigateur* OBS sur `http://localhost:7860/obs.html` (options : `?size=48&lines=1&show=subs&position=top&translation=only&key=MOTDEPASSE`).
+- **Chat Twitch lu par la voix clonée** pendant le Live : `python integrations/twitch_tts.py --channel MA_CHAINE --command "!tts" --cooldown 20 --who subs` (connexion anonyme, liens masqués, délai par personne, mots interdits avec `--blocklist`). `--play --voice ID` pour jouer sur les haut-parleurs du serveur.
+
 ### Bot Discord (texte → voix dans un salon)
 
 ```bash
@@ -192,7 +235,46 @@ cp discord_bot/.env.example discord_bot/.env   # renseignez DISCORD_TOKEN
 python discord_bot/bot.py
 ```
 
-Créez l'application sur <https://discord.com/developers/applications>, invitez le bot avec les scopes `bot` + `applications.commands` et les permissions *Connect* / *Speak*. Commandes : `/join`, `/say texte [voice] [model] [language]`, `/voices`, `/stop`, `/leave`. Nécessite `ffmpeg`.
+Créez l'application sur <https://discord.com/developers/applications>, invitez le bot avec les scopes `bot` + `applications.commands` et les permissions *Connect* / *Speak*. Nécessite `ffmpeg`.
+
+| Commande | Effet |
+|---|---|
+| `/join`, `/leave` | rejoindre / quitter votre salon vocal |
+| `/say texte [voice] [model] [language]` | lire un texte (mis en file d'attente) |
+| `/mavoix voix [model] [language]` | votre voix par défaut (chaque membre la sienne) |
+| `/lire on\|off` | lire à voix haute les messages de ce salon textuel (activer `DISCORD_READ_MESSAGES=1` et l'intention *Message Content*) |
+| `/file`, `/skip`, `/stop` | file d'attente, passer, tout arrêter |
+| `/live texte` | envoyer le texte au Live VoiceClone en cours |
+| `/voices` | lister les voix |
+
+---
+
+## 📚 Textes longs et livres audio
+
+Dans **Texte → Voix**, au-delà de 600 caractères (ou dès qu'il y a `[pause …]` ou des paragraphes), la génération passe en tâche de fond, phrase par phrase, avec une barre de progression. Le résultat affiche chaque phrase : écoutez-la, corrigez le texte, ↻ régénérez-la seule. Pauses : `[pause]` (0,8 s), `[pause 2s]`, `[pause 500ms]`, ligne vide = 0,6 s.
+
+L'onglet **Livre audio** découpe un `.epub` (ordre de lecture, titres des chapitres), un `.txt` / `.md` (lignes « Chapitre … » ou « # Titre ») ou un texte collé, vous laisse relire et décocher des chapitres, puis produit un MP3 par chapitre et une archive ZIP.
+
+## 🎛 Mélange de voix
+
+*Mes voix → Mélanger des voix* : deux voix et un dosage (ex. 70 / 30) donnent une nouvelle voix. XTTS, OpenVoice, Chatterbox et Seed-VC mélangent réellement les empreintes ; les autres modèles utilisent une référence composée d'extraits des deux voix.
+
+## 🎓 Entraînement
+
+- **Affiner XTTS v2** : à partir des échantillons transcrits de la voix (Whisper complète les transcriptions manquantes), entraîne le GPT de XTTS dans un processus séparé (progression par époque, annulation). Le modèle obtenu apparaît dans le catalogue (« XTTS · votre voix ») et devient le modèle préféré de la voix. Idéal : 5 à 30 min de voix propre ; GPU ≥ 12 Go conseillé (lot 2, accumulation 4).
+- **RVC** : importez un modèle `.pth` (+ `.index`) entraîné ailleurs, ou entraînez-le depuis l'interface avec [Applio](https://github.com/IAHispano/Applio) installé à part (dossier à indiquer dans Diagnostic → Réglages). Utilisez ensuite le modèle « RVC » en Voix → Voix ou en Live.
+
+## 🔐 Sécurité et éthique
+
+- **Mot de passe** : lancez le serveur avec `VOICECLONE_PASSWORD=…` ; l'interface, l'API et le WebSocket sont protégés (page de connexion, ou en-tête `Authorization: Bearer …` pour les scripts et le bot).
+- **Consentement** : chaque voix enregistre la déclaration faite à sa création (« c'est ma voix » / « j'ai l'autorisation »), datée.
+- **Filigrane** : *Diagnostic → Réglages* ajoute un filigrane inaudible à tout ce qui est généré (résiste au MP3 et au découpage) ; *Vérifier un filigrane* dit si un fichier vient de VoiceClone (fiable à partir de ~5 s).
+
+## 🩺 Diagnostic et mémoire GPU
+
+L'onglet **Diagnostic** montre chaque GPU (mémoire utilisée par VoiceClone et par les autres programmes), les modèles en mémoire, les versions des bibliothèques, des vérifications courantes et le **journal du serveur** en direct (bouton *Rapport* pour demander de l'aide). Réglages : nombre maximal de modèles chargés et **déchargement automatique** du moins utilisé quand la mémoire GPU manque (les modèles d'un Live en cours ne sont jamais déchargés).
+
+Pour tester tous les modèles installés sur le serveur : `python scripts/smoke_test.py` (chargement, synthèse, conversion, transcription, facteur temps réel ; sorties WAV à écouter dans `data/smoke_test/`).
 
 ---
 
@@ -205,10 +287,20 @@ L'interface s'appuie sur une API REST documentée automatiquement sur <http://lo
 | GET | `/api/models` | catalogue + état (téléchargé, dépendances, chargé, progression) |
 | POST | `/api/models/{id}/download` · `/load` · `/unload` | gestion des modèles |
 | GET/POST | `/api/voices` | liste / création (multipart : `name`, `files[]`, `consent=true`) |
-| POST | `/api/voices/{id}/samples` · `/prepare` · `/transcribe` | échantillons, entraînement, transcription |
+| POST | `/api/voices/{id}/samples` · `/prepare` · `/transcribe` | échantillons, préparation, transcription |
 | POST | `/api/tts` | `{model_id, voice_id, text, language, params}` → WAV |
 | POST | `/api/vc` | multipart `file`, `model_id`, `voice_id`, `mode` → WAV |
-| GET/POST | `/api/realtime/devices` · `/start` · `/stop` · `/status` | live |
+| GET/POST | `/api/realtime/devices` · `/start` · `/stop` · `/status` | live (audio du serveur) |
+| WS | `/api/realtime/ws` | live navigateur (PCM ou Opus) |
+| POST | `/api/realtime/say` | `{text}` dit par le Live en cours |
+| GET | `/api/overlay` | état du Live pour OBS |
+| POST | `/api/tts/long` | texte long → tâche ; `/api/jobs/{id}` pour suivre |
+| POST | `/api/history/{id}/segments/{n}` | régénérer une phrase |
+| POST | `/api/books/parse` · `/api/books` | livre audio |
+| POST | `/api/voices/mix` | mélange de voix |
+| POST | `/api/training/xtts` · `/api/training/rvc` | entraînements |
+| POST | `/api/watermark/detect` | détection du filigrane |
+| GET/PATCH | `/api/settings` · GET `/api/diagnostics` · `/api/logs` | réglages, diagnostic |
 
 Exemple :
 
@@ -227,14 +319,19 @@ voiceclone/
   server.py      API FastAPI + service de l'interface web
   registry.py    catalogue des modèles (dépôts HF, dépendances, paramètres)
   downloads.py   téléchargements Hugging Face en arrière-plan
-  manager.py     chargement/déchargement des moteurs, verrou GPU
-  voices.py      profils de voix (nettoyage audio, référence, cache)
-  realtime.py    moteur live (micro → modèle → câble virtuel)
-  audio.py       utilitaires audio (décodage, rééchantillonnage, analyse)
-  engines/       XTTS, Chatterbox, OpenVoice, F5-TTS, Whisper
-web/             interface (HTML/CSS/JS, sans build)
+  manager.py     chargement/déchargement des moteurs, verrou GPU, LRU
+  worker.py      isolation : moteur dans un autre processus / venv
+  voices.py      profils de voix (nettoyage audio, référence, cache, mélange)
+  prep.py        import intelligent (découpe, notation)   enhance.py  DeepFilterNet / Demucs
+  realtime.py    moteur live (micro → modèle → câble virtuel)   opus.py  compression du flux
+  longform.py    textes longs, pauses   books.py  livres audio   translation.py  traduction vocale
+  jobs.py        file de tâches   training.py / xtts_train.py  entraînements
+  watermark.py   filigrane   auth.py  mot de passe   diagnostics.py / logs.py / settings.py
+  engines/       XTTS, Chatterbox, OpenVoice, F5-TTS, Seed-VC, RVC, Whisper, traduction
+web/             interface (HTML/CSS/JS, sans build) + obs.html, login.html
 discord_bot/     bot Discord optionnel
-scripts/         micro virtuel Linux
+integrations/    lecture du chat Twitch
+scripts/         install.py, smoke_test.py, add_samples.py, split_audio.py, micro virtuel Linux
 tests/           tests (moteur factice, pas de téléchargement)
 ```
 
@@ -249,8 +346,10 @@ Les tests utilisent un moteur factice : ils vérifient l'API, la gestion des voi
 
 ## Dépannage
 
-- **« Dépendances manquantes »** : lancez la commande `pip install` affichée, puis redémarrez le serveur.
-- **CUDA out of memory** : déchargez les modèles inutilisés (onglet Modèles) ; XTTS ≈ 3 Go VRAM, Chatterbox ≈ 5-6 Go, OpenVoice < 1 Go.
+- **Quelque chose ne marche pas** : onglet **Diagnostic** → journal du serveur (et bouton *Rapport*), puis `python scripts/smoke_test.py --models <id>` pour tester un modèle hors interface.
+- **« Dépendances manquantes »** : lancez la commande `pip install` affichée (ou `python scripts/install.py <id>`), puis redémarrez le serveur.
+- **Conflit de versions entre moteurs** (numpy, transformers, torch) : `python scripts/install.py --isolated <id>`.
+- **CUDA out of memory** : déchargez les modèles inutilisés (Diagnostic → *Libérer la mémoire*) ou fixez un nombre maximal de modèles chargés ; XTTS ≈ 3 Go VRAM, Chatterbox ≈ 5-6 Go, OpenVoice < 1 Go.
 - **« Audio temps réel indisponible »** : installez PortAudio (`libportaudio2`).
 - **Discord coupe la voix** : désactivez Krisp et la sensibilité automatique.
 - **Voix robotique en live** : augmentez la taille des morceaux et le contexte, vérifiez que le seuil de silence ne coupe pas vos fins de phrases.
