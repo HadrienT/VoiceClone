@@ -6,7 +6,7 @@ import numpy as np
 
 from .. import audio
 from ..voices import Voice
-from .base import Engine, EngineError, to_numpy
+from .base import Engine, EngineError, mix_sources, to_numpy, weighted
 
 
 def _import_tone_color_converter():
