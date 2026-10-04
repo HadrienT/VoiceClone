@@ -18,6 +18,10 @@ from pathlib import Path
 
 def main(params: dict) -> None:
     import torch
+
+    from voiceclone.engines.xtts import patch_coqui
+
+    patch_coqui()  # avant les imports de TTS : compatibilité transformers 5 et lecture audio sans torchcodec
     from trainer import Trainer, TrainerArgs
 
     from TTS.config.shared_configs import BaseDatasetConfig

@@ -12,19 +12,29 @@ from .base import Engine, EngineError, mix_sources, read_audio_without_torchcode
 LANG_ALIASES = {"zh": "zh-cn"}
 
 
+def patch_coqui() -> None:
+    """Contournements pour coqui-tts, à appeler avant tout import de TTS (inférence et entraînement).
+
+    - transformers 5 (imposé par Chatterbox) a supprimé `isin_mps_friendly`, encore importé par coqui-tts ;
+    - l'audio (références, jeu d'entraînement) est lu via soundfile plutôt que torchcodec.
+    """
+    import torch
+    import transformers.pytorch_utils as hf_utils
+
+    if not hasattr(hf_utils, "isin_mps_friendly"):
+        hf_utils.isin_mps_friendly = torch.isin
+    from TTS.tts.models import xtts as xtts_module
+
+    read_audio_without_torchcodec(xtts_module)
+
+
 class XTTSEngine(Engine):
     def load(self) -> None:
         import torch
-        import transformers.pytorch_utils as hf_utils
 
-        # coqui-tts importe encore ce helper, supprimé dans transformers 5 (version imposée par Chatterbox)
-        if not hasattr(hf_utils, "isin_mps_friendly"):
-            hf_utils.isin_mps_friendly = torch.isin
+        patch_coqui()
         from TTS.tts.configs.xtts_config import XttsConfig
-        from TTS.tts.models import xtts as xtts_module
         from TTS.tts.models.xtts import Xtts
-
-        read_audio_without_torchcodec(xtts_module)  # lecture de la référence via soundfile
 
         cfg = XttsConfig()
         cfg.load_json(str(self.model_dir / "config.json"))
