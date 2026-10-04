@@ -1,4 +1,5 @@
 import { Recorder, toWav, listMicrophones, fmtTime, SYSTEM_SOURCE, canCaptureSystemAudio } from "./audio.js";
+import { BrowserLive, listBrowserDevices, canChooseOutput } from "./live-browser.js";
 
 // ---------------------------------------------------------------- utilitaires
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -543,7 +544,8 @@ $("#voice-list").addEventListener("click", async (e) => {
     } else if (btn.dataset.autoTranscribe) {
       const v = await busy(btn, "Transcription…", () => api(`/api/voices/${id}/transcribe`, { json: { model_id: btn.dataset.autoTranscribe } }));
       const done = v.samples.filter((s) => s.transcript).length;
-      toast(`Transcription terminée : ${done}/${v.samples.length} échantillon(s) — textes visibles sous chaque échantillon, corrigez-les si besoin.`, "ok", 7000);
+      if (done) toast(`Transcription terminée : ${done}/${v.samples.length} échantillon(s) — textes visibles sous chaque échantillon, corrigez-les si besoin.`, "ok", 7000);
+      else toast("Whisper n'a reconnu aucune parole dans ces échantillons. Vérifiez la langue de la voix ou tapez le texte à la main.", "error", 9000);
     } else if (btn.hasAttribute("data-prepare")) {
       const model = $("[data-prep-model]", card).value;
       const r = await busy(btn, "Entraînement…", () => api(`/api/voices/${id}/prepare`, { json: { model_id: model } }));
@@ -736,88 +738,152 @@ $("#live-mode").addEventListener("click", (e) => {
 $("#live-model").addEventListener("change", onLiveModelChange);
 $("#live-asr").addEventListener("change", () => { store.set("asr.model", $("#live-asr").value); onLiveModelChange(); });
 
+state.liveWhere = store.get("live.where", "browser");
+const browserLive = new BrowserLive({
+  onStatus: (st) => renderLiveStatus(st),
+  onStopped: (message) => {
+    if (message) toast(message, "error", 8000);
+    renderLiveStatus({ state: message ? "error" : "idle", error: message });
+  },
+});
+const deviceKey = () => `live.devices.${state.liveWhere}`;
+const devLabel = (x) => `${x.virtual ? "★ " : ""}${x.name}${x.default ? " (défaut)" : ""}${x.hostapi ? ` — ${x.hostapi}` : ""}`;
+
+function showDeviceNotice(html) {
+  $("#live-dev-error").innerHTML = html || "";
+  $("#live-dev-error").classList.toggle("hidden", !html);
+}
+
+function fillDeviceSelects(inputs, outputs) {
+  const saved = store.get(deviceKey(), {});
+  const def = (list) => list.find((x) => x.default)?.id ?? list[0]?.id ?? "";
+  fillSelect($("#live-in"), inputs.map((x) => ({ value: x.id, label: devLabel(x) })), { value: saved.input ?? def(inputs) });
+  const virt = outputs.find((x) => x.virtual)?.id;
+  fillSelect($("#live-out"), outputs.map((x) => ({ value: x.id, label: devLabel(x) })), { value: saved.output ?? virt ?? def(outputs) });
+  fillSelect($("#live-mon"), [{ value: "", label: "Aucun" }, ...outputs.map((x) => ({ value: x.id, label: devLabel(x) }))], { value: saved.monitor ?? "" });
+}
+
 async function loadDevices() {
   try {
-    const d = await api("/api/realtime/devices");
-    const lbl = (x) => `${x.virtual ? "★ " : ""}${x.name}${x.default ? " (défaut)" : ""} — ${x.hostapi}`;
-    const saved = store.get("live.devices", {});
-    const def = (list) => list.find((x) => x.default)?.id ?? "";
-    fillSelect($("#live-in"), d.inputs.map((x) => ({ value: x.id, label: lbl(x) })), { value: saved.input ?? def(d.inputs) });
-    const virt = d.outputs.find((x) => x.virtual)?.id;
-    fillSelect($("#live-out"), d.outputs.map((x) => ({ value: x.id, label: lbl(x) })), { value: saved.output ?? virt ?? def(d.outputs) });
-    fillSelect($("#live-mon"), [{ value: "", label: "Aucun" }, ...d.outputs.map((x) => ({ value: x.id, label: lbl(x) }))], { value: saved.monitor ?? "" });
-    $("#live-dev-error").classList.add("hidden");
-    if (!d.outputs.some((x) => x.virtual)) {
-      $("#live-dev-error").innerHTML = "Aucun câble audio virtuel détecté. Installez-en un (voir le guide ci-dessous) pour envoyer la voix dans Discord.";
-      $("#live-dev-error").classList.remove("hidden");
+    if (state.liveWhere === "browser") {
+      const d = await listBrowserDevices();
+      const outputs = d.outputs.map((x) => ({ ...x, name: x.label, default: x.id === "default" }));
+      fillDeviceSelects(d.inputs.map((x) => ({ ...x, name: x.label, default: x.id === "default" })), outputs);
+      if (!canChooseOutput()) {
+        showDeviceNotice("Ce navigateur ne sait pas choisir la sortie audio : ouvrez VoiceClone dans <b>Chrome</b> ou <b>Edge</b> pour envoyer la voix vers VB-CABLE.");
+      } else if (!outputs.some((x) => x.virtual)) {
+        showDeviceNotice("Aucun câble audio virtuel détecté sur ce PC. Installez <a href=\"https://vb-audio.com/Cable/\" target=\"_blank\" rel=\"noopener\">VB-CABLE</a>, redémarrez le navigateur puis cliquez sur ↻.");
+      } else showDeviceNotice("");
+    } else {
+      const d = await api("/api/realtime/devices");
+      fillDeviceSelects(d.inputs, d.outputs);
+      showDeviceNotice(d.outputs.some((x) => x.virtual) ? "" : "Aucun câble audio virtuel détecté sur le serveur.");
     }
   } catch (err) {
-    $("#live-dev-error").textContent = err.message;
-    $("#live-dev-error").classList.remove("hidden");
+    fillDeviceSelects([], []);
+    showDeviceNotice(state.liveWhere === "server"
+      ? `${esc(err.message)}<br>Si VoiceClone tourne sur un serveur distant, choisissez « Audio de ce PC ».`
+      : `Accès aux périphériques refusé : ${esc(err.message)}`);
   }
 }
 $("#live-refresh").addEventListener("click", loadDevices);
 ["#live-in", "#live-out", "#live-mon"].forEach((s) => $(s).addEventListener("change", () => {
-  store.set("live.devices", { input: $("#live-in").value, output: $("#live-out").value, monitor: $("#live-mon").value });
+  store.set(deviceKey(), { input: $("#live-in").value, output: $("#live-out").value, monitor: $("#live-mon").value });
 }));
+
+$("#live-where").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-where]");
+  if (!b || state.liveRunning) return;
+  state.liveWhere = b.dataset.where;
+  store.set("live.where", state.liveWhere);
+  $$("#live-where button").forEach((x) => x.classList.toggle("active", x === b));
+  loadDevices();
+  pollLive(true);
+});
+$$("#live-where button").forEach((x) => x.classList.toggle("active", x.dataset.where === state.liveWhere));
 
 const intOrNull = (v) => (v === "" || v === undefined ? null : parseInt(v, 10));
 
+function liveSettings() {
+  const v = (s) => parseFloat($(s).value);
+  return {
+    mode: state.liveMode,
+    model_id: $("#live-model").value || null,
+    voice_id: $("#live-voice").value || null,
+    asr_model_id: $("#live-asr").value || null,
+    source_voice_id: $("#live-src").value || null,
+    language: $("#live-lang").value || "fr",
+    chunk_ms: v("#live-chunk"), context_ms: v("#live-ctx"), silence_db: v("#live-th"),
+    end_silence_ms: v("#live-eos"), input_gain: v("#live-ig"), output_gain: v("#live-og"),
+    params: readParams($("#live-params")),
+  };
+}
+
 $("#live-toggle").addEventListener("click", (e) => busy(e.currentTarget, state.liveRunning ? "Arrêt…" : "Démarrage…", async () => {
   try {
+    if (state.liveWhere === "browser") {
+      if (state.liveRunning) {
+        await browserLive.stop();
+        renderLiveStatus({ state: "idle" });
+      } else {
+        renderLiveStatus({ state: "starting" });
+        await browserLive.start(liveSettings(), { input: $("#live-in").value, output: $("#live-out").value, monitor: $("#live-mon").value });
+        toast("Live démarré — parlez !", "ok");
+        loadModels();
+      }
+      return;
+    }
     if (state.liveRunning) {
       await api("/api/realtime/stop", { method: "POST" });
     } else {
-      const v = (s) => parseFloat($(s).value);
       await api("/api/realtime/start", {
         json: {
-          mode: state.liveMode,
-          model_id: $("#live-model").value || null,
-          voice_id: $("#live-voice").value || null,
-          asr_model_id: $("#live-asr").value || null,
-          source_voice_id: $("#live-src").value || null,
-          language: $("#live-lang").value || "fr",
+          ...liveSettings(),
           input_device: intOrNull($("#live-in").value),
           output_device: intOrNull($("#live-out").value),
           monitor_device: intOrNull($("#live-mon").value),
-          chunk_ms: v("#live-chunk"), context_ms: v("#live-ctx"), silence_db: v("#live-th"),
-          end_silence_ms: v("#live-eos"), input_gain: v("#live-ig"), output_gain: v("#live-og"),
-          params: readParams($("#live-params")),
         },
       });
       toast("Live démarré — parlez !", "ok");
       loadModels();
     }
-  } catch (err) { toast(err.message, "error"); }
-  pollLive(true);
+  } catch (err) {
+    toast(err.message, "error", 8000);
+    if (state.liveWhere === "browser") renderLiveStatus({ state: "error", error: err.message });
+  }
+  if (state.liveWhere === "server") pollLive(true);
 }));
 
 const dbToPct = (db) => Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
 
+function renderLiveStatus(s) {
+  state.liveRunning = s.state === "running" || s.state === "starting";
+  const btn = $("#live-toggle");
+  if (!btn.disabled) {
+    btn.textContent = state.liveRunning ? "■ Arrêter" : "▶ Démarrer";
+    btn.classList.toggle("running", state.liveRunning);
+  }
+  const names = { idle: "arrêté", starting: "démarrage…", running: "en direct 🔴", error: "erreur" };
+  $("#live-state").textContent = names[s.state] || s.state;
+  $("#live-in-meter").style.width = `${dbToPct(s.input_db ?? -120)}%`;
+  $("#live-out-meter").style.width = `${dbToPct(s.output_db ?? -120)}%`;
+  $("#live-proc").textContent = s.process_ms ? `${Math.round(s.process_ms)} ms` : "–";
+  $("#live-buf").textContent = state.liveRunning && s.buffer_ms !== undefined ? `${s.buffer_ms} ms` : "–";
+  $("#live-chunks").textContent = state.liveRunning && s.chunks !== undefined ? `${s.chunks} / ${s.dropped}` : "–";
+  $("#live-error").textContent = s.error || "";
+  $("#live-error").classList.toggle("hidden", !s.error);
+  const tr = s.transcripts || [];
+  $("#live-transcripts").classList.toggle("hidden", !tr.length);
+  $("#live-transcripts").innerHTML = tr.map((t) => `<div>${esc(t.text)}<small>${t.first_audio_ms ? `voix après ${t.first_audio_ms} ms` : ""}</small></div>`).join("");
+  $$("#live-mode button, #live-where button").forEach((b) => { b.disabled = state.liveRunning; });
+}
+
 async function pollLive(force) {
   clearTimeout(state.livePoll);
+  if (state.liveWhere !== "server") return; // en mode navigateur, le statut arrive par le WebSocket
   if (state.tab !== "live" && !force) return;
   try {
-    const s = await api("/api/realtime/status");
-    state.liveRunning = s.state === "running" || s.state === "starting";
-    const btn = $("#live-toggle");
-    if (!btn.disabled) {
-      btn.textContent = state.liveRunning ? "■ Arrêter" : "▶ Démarrer";
-      btn.classList.toggle("running", state.liveRunning);
-    }
-    const names = { idle: "arrêté", starting: "démarrage…", running: "en direct 🔴", error: "erreur" };
-    $("#live-state").textContent = names[s.state] || s.state;
-    $("#live-in-meter").style.width = `${dbToPct(s.input_db)}%`;
-    $("#live-out-meter").style.width = `${dbToPct(s.output_db)}%`;
-    $("#live-proc").textContent = s.process_ms ? `${Math.round(s.process_ms)} ms` : "–";
-    $("#live-buf").textContent = state.liveRunning ? `${s.buffer_ms} ms` : "–";
-    $("#live-chunks").textContent = state.liveRunning ? `${s.chunks} / ${s.dropped}` : "–";
-    $("#live-error").textContent = s.error || "";
-    $("#live-error").classList.toggle("hidden", !s.error);
-    const tr = s.transcripts || [];
-    $("#live-transcripts").classList.toggle("hidden", !tr.length);
-    $("#live-transcripts").innerHTML = tr.map((t) => `<div>${esc(t.text)}<small>${t.first_audio_ms ? `voix après ${t.first_audio_ms} ms` : ""}</small></div>`).join("");
-    $$("#live-mode button").forEach((b) => { b.disabled = state.liveRunning; });
+    renderLiveStatus(await api("/api/realtime/status"));
   } catch { /* serveur indisponible */ }
   state.livePoll = setTimeout(pollLive, state.liveRunning ? 150 : 1500);
 }

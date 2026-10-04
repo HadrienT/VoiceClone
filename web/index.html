@@ -187,10 +187,14 @@
       <header class="page-head">
         <h1>Live / Discord</h1>
         <p>Parlez dans votre micro, la voix clonée sort en direct sur un câble audio virtuel que Discord
-          utilise comme micro. Le traitement tourne sur cette machine.</p>
+          utilise comme micro. Le calcul se fait sur le serveur (GPU).</p>
       </header>
 
       <div class="card">
+        <div class="seg" id="live-where">
+          <button data-where="browser" class="active">🖥️ Audio de ce PC <small>micro et sorties du PC où la page est ouverte</small></button>
+          <button data-where="server">🗄️ Audio du serveur <small>seulement si VoiceClone tourne sur votre PC</small></button>
+        </div>
         <div class="seg" id="live-mode">
           <button data-mode="vc" class="active">Conversion directe <small>latence ≈ 0,5-1 s</small></button>
           <button data-mode="asr_tts">Transcription + TTS <small>phrase par phrase</small></button>
@@ -255,8 +259,9 @@
               <li><b>Linux</b> : <code>./scripts/linux_virtual_mic.sh</code> (PulseAudio / PipeWire)</li>
             </ul>
           </li>
-          <li>Ici, choisissez votre vrai micro en entrée et le câble en sortie
-            (<i>CABLE Input</i>, <i>BlackHole 2ch</i> ou <i>VoiceClone_Sink</i>). Les câbles détectés sont marqués ★.</li>
+          <li>Ici, gardez « Audio de ce PC », choisissez votre vrai micro en entrée et le câble en sortie
+            (<i>CABLE Input</i>, <i>BlackHole 2ch</i> ou <i>VoiceClone_Sink</i>). Les câbles détectés sont marqués ★.
+            Mettez votre casque en « Retour casque » pour vous entendre. Utilisez Chrome ou Edge.</li>
           <li>Dans Discord → Paramètres → Voix et vidéo : périphérique d'entrée = <i>CABLE Output</i> /
             <i>BlackHole 2ch</i> / <i>VoiceClone_Mic</i>.</li>
           <li>Dans Discord, désactivez la <b>suppression de bruit (Krisp)</b> et la <b>sensibilité automatique</b>,
