@@ -26,3 +26,17 @@ MAX_REFERENCE_SECONDS = float(os.environ.get("VOICECLONE_MAX_REF_SECONDS", "30")
 def ensure_dirs() -> None:
     for d in (MODELS_DIR, VOICES_DIR, OUTPUTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def child_env(**extra: str) -> dict:
+    """Environnement pour un sous-processus Python (entraînement, moteur isolé).
+
+    Certaines bibliothèques chargées dans le serveur écrivent PYTHONHASHSEED avec une valeur
+    invalide (graine négative ou trop grande) : le Python enfant refuse alors de démarrer
+    (« PYTHONHASHSEED must be "random" or an integer in range [0; 4294967295] »). On la retire.
+    """
+    env = {**os.environ, **extra}
+    seed = env.get("PYTHONHASHSEED")
+    if seed is not None and seed != "random" and not (seed.isdigit() and int(seed) <= 4294967295):
+        env.pop("PYTHONHASHSEED")
+    return env

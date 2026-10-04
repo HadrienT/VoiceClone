@@ -51,9 +51,10 @@ class RemoteEngine(Engine):
             raise EngineError(f"Python introuvable pour {self.spec.name} : {self.python}")
         key = secrets.token_bytes(16)
         listener = Listener(("127.0.0.1", 0), authkey=key)
-        env = {**os.environ, "VOICECLONE_WORKER_ADDR": f"{listener.address[0]}:{listener.address[1]}",
-               "VOICECLONE_WORKER_KEY": key.hex(),
-               "PYTHONPATH": os.pathsep.join(filter(None, [str(config.ROOT_DIR), os.environ.get("PYTHONPATH")]))}
+        env = config.child_env(
+            VOICECLONE_WORKER_ADDR=f"{listener.address[0]}:{listener.address[1]}",
+            VOICECLONE_WORKER_KEY=key.hex(),
+            PYTHONPATH=os.pathsep.join(filter(None, [str(config.ROOT_DIR), os.environ.get("PYTHONPATH")])))
         self._proc = subprocess.Popen([self.python, "-m", "voiceclone.worker"], env=env,
                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         threading.Thread(target=self._pump_logs, daemon=True).start()

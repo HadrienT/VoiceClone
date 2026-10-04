@@ -108,7 +108,7 @@ def run_process(job: Job, cmd: list[str], cwd: Path | None = None, env: dict | N
                 progress=None, log_path: Path | None = None) -> None:
     """Lance cmd, recopie sa sortie dans le journal, met à jour la progression, s'arrête si annulé."""
     log.info("Entraînement : %s", " ".join(str(c) for c in cmd))
-    proc = subprocess.Popen([str(c) for c in cmd], cwd=str(cwd) if cwd else None, env={**os.environ, **(env or {})},
+    proc = subprocess.Popen([str(c) for c in cmd], cwd=str(cwd) if cwd else None, env=config.child_env(**(env or {})),
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     tail: list[str] = []
     out = open(log_path, "a", encoding="utf-8") if log_path else None
