@@ -44,8 +44,19 @@ def test_xtts_dataset(client):
 
 
 FAKE_XTTS = textwrap.dedent('''
-    import json, sys, pathlib
+    import json, os, sys, pathlib
+    if sys.argv[1] == "-c":  # vérification préalable de l'environnement
+        if os.environ.get("FAKE_NUMPY_BROKEN"):
+            sys.exit("ImportError: Matplotlib requires numpy>=1.25; you have 1.23.5")
+        sys.exit(0)
     p = json.loads(sys.argv[-1])
+    rank = int(os.environ.get("RANK", "0"))
+    out = pathlib.Path(p["output"]); out.mkdir(parents=True, exist_ok=True)
+    (out / f"rank{rank}").write_text(os.environ.get("CUDA_VISIBLE_DEVICES", "") + "|" + str(p["world_size"]))
+    if p["world_size"] > 1 and os.environ.get("FAKE_DDP_BROKEN"):
+        sys.exit("NCCL error")
+    if rank:
+        sys.exit(0)
     out = pathlib.Path(p["output"]); out.mkdir(parents=True, exist_ok=True)
     for e in range(p["epochs"]):
         print(f" > EPOCH: {e}/{p['epochs']}", flush=True)
@@ -270,3 +281,77 @@ def test_add_samples_cli_training(tmp_path):
     r = run("Moi", str(src), "--training")
     assert r.returncode == 0, r.stderr
     assert "Audio d'entraînement de 'Moi'" in r.stdout and "extraits" in r.stdout
+
+
+def _setup_fake_xtts(tmp_path):
+    base = config.MODELS_DIR / "xtts-v2"
+    base.mkdir(parents=True, exist_ok=True)
+    for f in ("model.pth", "config.json", "vocab.json", "dvae.pth", "mel_stats.pth"):
+        (base / f).write_text("{}")
+    fake = tmp_path / "fakepython"
+    fake.write_text(f"#!/bin/sh\nexec {sys.executable} {tmp_path / 'fake_xtts.py'} \"$@\"\n")
+    fake.chmod(0o755)
+    (tmp_path / "fake_xtts.py").write_text(FAKE_XTTS)
+    settings.update(engine_python={"xtts-v2": str(fake)})
+
+
+def _ranks(job_result_dir):
+    return sorted(p.name for p in job_result_dir.glob("rank*"))
+
+
+def test_xtts_multi_gpu(client, tmp_path, monkeypatch):
+    _setup_fake_xtts(tmp_path)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr(training, "manager_device", lambda: "cuda:1")
+    monkeypatch.setattr(training, "cuda_count", lambda: 2)
+    assert training.training_gpus("all") == ["0", "1"] and training.training_gpus("one") == ["1"]
+    seen = []
+    real = training.run_process
+    monkeypatch.setattr(training, "run_process", lambda *a, **k: (seen.append(k), real(*a, **k))[1])
+    monkeypatch.setattr(training.shutil, "rmtree", lambda *a, **k: None)  # garder le dossier pour l'inspecter
+    v = _voice(client, transcript="Phrase.")
+    j = _wait(client, client.post("/api/training/xtts", json={"voice_id": v["id"], "epochs": 2}).json()["id"])
+    assert j["state"] == "done", j
+    assert len(seen) == 1 and seen[0]["env"]["CUDA_VISIBLE_DEVICES"] == "0,1" and seen[0]["companions"] == [{"RANK": "1"}]
+    run = next((config.DATA_DIR / "training").glob("xtts-*")) / "run"
+    assert (run / "rank0").read_text() == "0,1|2" and (run / "rank1").read_text() == "0,1|2"
+
+
+def test_xtts_multi_gpu_falls_back_to_one(client, tmp_path, monkeypatch):
+    _setup_fake_xtts(tmp_path)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setenv("FAKE_DDP_BROKEN", "1")
+    monkeypatch.setattr(training, "manager_device", lambda: "cuda:1")
+    monkeypatch.setattr(training, "cuda_count", lambda: 2)
+    v = _voice(client, transcript="Phrase.")
+    j = _wait(client, client.post("/api/training/xtts", json={"voice_id": v["id"], "epochs": 2}).json()["id"])
+    assert j["state"] == "done", j  # échec en multi-GPU, réussite sur le seul GPU 1
+
+
+def test_xtts_broken_numpy_gives_clear_fix(client, tmp_path, monkeypatch):
+    _setup_fake_xtts(tmp_path)
+    monkeypatch.setenv("FAKE_NUMPY_BROKEN", "1")
+    v = _voice(client, transcript="Phrase.")
+    j = _wait(client, client.post("/api/training/xtts", json={"voice_id": v["id"]}).json()["id"])
+    assert j["state"] == "error" and "numpy==1.26.4" in j["error"] and "--isolated rvc" in j["error"]
+
+
+def test_install_isolates_rvc_by_default(tmp_path):
+    import subprocess
+
+    from tests.test_scripts import ROOT
+
+    env = {"VOICECLONE_DATA": str(tmp_path / "data"), "PATH": "/usr/bin:/bin"}
+    r = subprocess.run([sys.executable, str(ROOT / "scripts/install.py"), "--dry-run", "rvc", "whisper-small"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert "installation isolée" in r.stdout and "== rvc (environnement isolé)" in r.stdout
+    assert "faster-whisper" in r.stdout
+
+
+def test_diagnostic_flags_old_numpy():
+    from voiceclone import diagnostics
+
+    checks = diagnostics.checks([{"dist": "numpy", "version": "1.23.5"}, {"dist": "matplotlib", "version": "3.10.0"}],
+                                "ffmpeg")
+    assert any(not c["ok"] and "numpy 1.23.5" in c["label"] for c in checks)

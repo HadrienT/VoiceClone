@@ -4,6 +4,10 @@ Reprend la recette officielle de fine-tuning du GPT de XTTS v2 (coqui-tts), avec
 modèle déjà téléchargés par VoiceClone. Écrit <output>/result.json avec le chemin du modèle obtenu
 (poids allégés : sans l'état de l'optimiseur).
 
+Multi-GPU : VoiceClone lance un processus par GPU (variable RANK, world_size > 1) ; le Trainer de
+coqui les synchronise en PyTorch DDP. Chaque GPU traite son propre lot : le lot effectif est
+batch_size × nombre de GPU × accumulation.
+
     python -m voiceclone.xtts_train '{"dataset": "...", "output": "...", "base_dir": "...",
                                       "language": "fr", "epochs": 10, "batch_size": 2, "grad_accum": 4}'
 """
@@ -17,6 +21,8 @@ from pathlib import Path
 
 
 def main(params: dict) -> None:
+    import os
+
     import torch
 
     from voiceclone.engines.xtts import patch_coqui
@@ -29,6 +35,16 @@ def main(params: dict) -> None:
     from TTS.tts.layers.xtts.trainer.gpt_trainer import GPTArgs, GPTTrainer, GPTTrainerConfig
     from TTS.tts.models.xtts import XttsAudioConfig
 
+    rank = int(os.environ.get("RANK", "0"))
+    world = int(params.get("world_size", 1))
+    ddp = world > 1
+    # précision mixte : bf16 sur les GPU récents (Ampere et plus), sinon fp32 (fp16 est instable ici)
+    want = params.get("precision", "auto")
+    bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    mixed = want == "bf16" or (want == "auto" and bf16)
+    if rank == 0:
+        print(f" > VoiceClone : {world} GPU, précision {'bf16' if mixed else 'fp32'}, "
+              f"lot {params['batch_size']} × {world} GPU × {params['grad_accum']} accumulations", flush=True)
     base = Path(params["base_dir"])
     out = Path(params["output"])
     out.mkdir(parents=True, exist_ok=True)
@@ -47,9 +63,11 @@ def main(params: dict) -> None:
         project_name="voiceclone", dashboard_logger="tensorboard", logger_uri=None,
         audio=XttsAudioConfig(sample_rate=22050, dvae_sample_rate=22050, output_sample_rate=24000),
         batch_size=int(params["batch_size"]), batch_group_size=48, eval_batch_size=int(params["batch_size"]),
-        num_loader_workers=2, eval_split_max_size=256, print_step=50, plot_step=100, log_model_step=100,
+        num_loader_workers=int(params.get("workers", 4)), eval_split_max_size=256, print_step=50, plot_step=100, log_model_step=100,
         save_step=100000, save_n_checkpoints=1, save_checkpoints=True, print_eval=False, optimizer="AdamW",
-        optimizer_wd_only_on_weights=True, optimizer_params={"betas": [0.9, 0.96], "eps": 1e-8, "weight_decay": 1e-2},
+        optimizer_wd_only_on_weights=not ddp,  # recommandation coqui en multi-GPU
+        mixed_precision=mixed, precision="bf16",
+        distributed_url=params.get("dist_url", "tcp://localhost:54321"), distributed_backend="nccl", optimizer_params={"betas": [0.9, 0.96], "eps": 1e-8, "weight_decay": 1e-2},
         lr=5e-06, lr_scheduler="MultiStepLR",
         lr_scheduler_params={"milestones": [50000 * 18, 150000 * 18, 300000 * 18], "gamma": 0.5, "last_epoch": -1},
         test_sentences=[])
@@ -58,9 +76,12 @@ def main(params: dict) -> None:
                                                    eval_split_max_size=cfg.eval_split_max_size,
                                                    eval_split_size=cfg.eval_split_size)
     trainer = Trainer(TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False,
-                                  grad_accum_steps=int(params["grad_accum"])),
+                                  grad_accum_steps=int(params["grad_accum"]), use_ddp=ddp, rank=rank,
+                                  group_id=params.get("group_id", "")),
                       cfg, output_path=str(out), model=model, train_samples=train_samples, eval_samples=eval_samples)
     trainer.fit()
+    if rank != 0:  # seul le processus principal enregistre le résultat
+        return
     run_dir = Path(trainer.output_path)
     del model, trainer
     gc.collect()

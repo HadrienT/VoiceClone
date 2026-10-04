@@ -35,6 +35,7 @@ PACKAGES = (
     ("scipy", "scipy", "scipy"),
     ("FastAPI", "fastapi", "fastapi"),
     ("setuptools", "setuptools", "setuptools"),
+    ("matplotlib", "matplotlib", "matplotlib"),
 )
 
 
@@ -62,6 +63,12 @@ def _ffmpeg() -> str | None:
         return "installé"
 
 
+def _ver(v: str) -> tuple[int, ...]:
+    import re
+
+    return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
+
+
 def packages() -> list[dict]:
     return [{"name": n, "dist": d, "version": _version(d, m)} for n, d, m in PACKAGES]
 
@@ -77,6 +84,10 @@ def checks(pkgs: list[dict], ffmpeg: str | None) -> list[dict]:
         {"ok": opus.available(), "label": "Compression Opus du Live (PyAV)",
          "help": None if opus.available() else "pip install av"},
     ]
+    np_v, mpl = v.get("numpy"), v.get("matplotlib")
+    if np_v and mpl and _ver(np_v) < (1, 25):
+        out.append({"ok": False, "label": f"numpy {np_v} trop ancien pour matplotlib (entraînement XTTS impossible)",
+                    "help": "pip install 'numpy==1.26.4' puis python scripts/install.py --isolated rvc"})
     st = v.get("setuptools")
     if v.get("chatterbox-tts") and st and st[0].isdigit() and int(st.split(".")[0]) >= 81:
         out.append({"ok": False, "label": "setuptools < 81 pour Chatterbox (perth / pkg_resources)",

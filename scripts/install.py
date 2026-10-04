@@ -28,6 +28,9 @@ from voiceclone import config, settings  # noqa: E402
 from voiceclone.registry import all_models, get_model  # noqa: E402
 
 BASE_FOR_WORKER = ["numpy", "scipy", "soundfile"]
+# Ces moteurs épinglent de vieilles versions (numpy 1.23, descript-audio-codec…) qui cassent les
+# autres : installés isolés par défaut (--no-isolate pour forcer l'environnement courant).
+ALWAYS_ISOLATED = {"rvc", "seed-vc"}
 
 
 def installer(python: str) -> list[str]:
@@ -82,6 +85,7 @@ def main() -> int:
     ap.add_argument("--torch", metavar="SAVEUR", help="installe PyTorch avant : cu118, cu121, cu124, cu128, cpu…")
     ap.add_argument("--isolated", action="store_true", help="un venv par modèle (data/envs/<id>)")
     ap.add_argument("--dry-run", action="store_true", help="affiche les commandes sans les exécuter")
+    ap.add_argument("--no-isolate", action="store_true", help="installer rvc / seed-vc dans l'environnement courant")
     a = ap.parse_args()
 
     if a.list:
@@ -97,6 +101,16 @@ def main() -> int:
         return 2
     for mid in ids:
         get_model(mid)  # erreur claire si l'identifiant est inconnu
+    risky = [m for m in ids if m in ALWAYS_ISOLATED]
+    if risky and not a.isolated and not a.no_isolate:
+        print(f"{', '.join(risky)} : installation isolée (évite de casser numpy / les autres moteurs).")
+        if len(risky) < len(ids):
+            main_ids = [m for m in ids if m not in ALWAYS_ISOLATED]
+            code = subprocess.run([sys.executable, __file__, *main_ids, *(["--torch", a.torch] if a.torch else []),
+                                   *(["--dry-run"] if a.dry_run else [])]).returncode
+            if code:
+                return code
+        ids, a.isolated = risky, True
 
     if not a.isolated:
         if a.torch:

@@ -157,6 +157,8 @@ class XTTSTrainRequest(BaseModel):
     asr_model_id: str | None = None
     language: str | None = None
     name: str | None = Field(None, max_length=100)
+    gpus: str = Field("all", pattern="^(all|one)$")  # all : tous les GPU (DDP), one : celui de VoiceClone
+    precision: str = Field("auto", pattern="^(auto|bf16|fp32)$")
 
 
 class RVCTrainRequest(BaseModel):
@@ -707,7 +709,7 @@ def create_app() -> FastAPI:
         voice = voices.get(body.voice_id)
         return jobs.submit("train", f"🎓 XTTS · {voice.name}", lambda job: training.finetune_xtts(
             job, manager, voices, body.voice_id, body.epochs, body.batch_size, body.grad_accum,
-            body.asr_model_id, body.language, body.name)).to_dict()
+            body.asr_model_id, body.language, body.name, body.gpus, body.precision)).to_dict()
 
     @app.post("/api/training/rvc")
     def train_rvc(body: RVCTrainRequest):
