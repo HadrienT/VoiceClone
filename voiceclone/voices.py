@@ -61,6 +61,7 @@ class Voice:
     prepared: dict = field(default_factory=dict)  # model_id -> timestamp
     settings: dict = field(default_factory=dict)  # réglages préférés : {"tts": {model_id, language, params}}
     consent: dict = field(default_factory=dict)  # trace du consentement : {confirmed, at, statement, source}
+    mix: dict = field(default_factory=dict)  # voix mélangée : {"sources": [{"voice_id", "name", "weight"}]}
 
     @property
     def dir(self) -> Path:
@@ -145,6 +146,52 @@ class VoiceStore:
             (voice.dir / "samples").mkdir(parents=True, exist_ok=True)
             self.save(voice)
             return voice
+
+    def create_mix(self, name: str, sources: list[tuple[str, float]], language: str | None = None) -> Voice:
+        """Voix intermédiaire entre plusieurs profils.
+
+        La référence audio assemble des extraits de chaque voix au prorata des poids (utilisable par
+        tous les modèles) ; XTTS, OpenVoice et Chatterbox mélangent en plus exactement les empreintes.
+        """
+        srcs = [(self.get(vid), float(w)) for vid, w in sources if float(w) > 0]
+        if len(srcs) < 2:
+            raise ValueError("Choisissez au moins deux voix avec un poids non nul.")
+        if len({v.id for v, _ in srcs}) != len(srcs):
+            raise ValueError("Choisissez des voix différentes.")
+        total = sum(w for _, w in srcs)
+        srcs = [(v, w / total) for v, w in srcs]
+        for v, _ in srcs:
+            if not v.reference_path.exists():
+                raise ValueError(f"La voix « {v.name} » n'a pas encore d'audio.")
+        consent = {"confirmed": True, "at": time.time(), "via": "mix",
+                   "statement": "Mélange de voix dont le consentement a été déclaré : "
+                                + ", ".join(v.name for v, _ in srcs),
+                   "sources": {v.id: v.consent for v, _ in srcs}}
+        voice = self.create(name, language or srcs[0][0].language,
+                            "Mélange : " + " + ".join(f"{v.name} {round(w * 100)} %" for v, w in srcs), consent=consent)
+        with self._lock:
+            voice.mix = {"sources": [{"voice_id": v.id, "name": v.name, "weight": round(w, 4)} for v, w in srcs]}
+            budget = config.MAX_REFERENCE_SECONDS
+            for i, (v, w) in enumerate(sorted(srcs, key=lambda s: -s[1]), 1):
+                x, _ = v.reference_audio(STORE_SR)
+                n = int(max(3.0, budget * w) * STORE_SR)
+                rel = f"samples/{i:03d}.wav"
+                audio.save_wav(voice.dir / rel, x[:n], STORE_SR)
+                voice.samples.append(Sample(file=rel, duration=round(min(n, len(x)) / STORE_SR, 2), source="mix",
+                                            original_name=f"{v.name} · {round(w * 100)} %"))
+            self._rebuild_reference(voice)
+            self.save(voice)
+        return voice
+
+    def mix_sources(self, voice: Voice) -> list[tuple[Voice, float]]:
+        """Voix sources et poids d'une voix mélangée (vide si ce n'en est pas une ou s'il en manque)."""
+        out = []
+        for s in (voice.mix or {}).get("sources", []):
+            try:
+                out.append((self.get(s["voice_id"]), float(s["weight"])))
+            except KeyError:
+                return []  # une source a été supprimée : on se rabat sur la référence assemblée
+        return out
 
     def add_sample(self, voice_id: str, data: bytes, source: str = "upload",
                    original_name: str = "", transcript: str = "") -> Voice:

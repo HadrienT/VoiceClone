@@ -89,6 +89,9 @@ class OpenVoiceEngine(Engine):
         cache = voice.cache_dir / f"{self.spec.id}.se.pt"
         if cache.exists():
             se = torch.load(cache, map_location=self.device)
+        elif mix := mix_sources(voice):  # voix mélangée : moyenne pondérée des timbres
+            se = weighted([self._target_se(v) for v, _ in mix], [w for _, w in mix])
+            torch.save(se.cpu(), cache)
         else:
             if not voice.reference_path.exists():
                 raise EngineError("Cette voix n'a pas encore d'échantillon audio.")

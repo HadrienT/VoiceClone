@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import numpy as np
 
 from ..voices import Voice
-from .base import Engine, EngineError, read_audio_without_torchcodec, split_text, to_numpy
+from .base import Engine, EngineError, mix_sources, read_audio_without_torchcodec, split_text, to_numpy, weighted
 
 LANG_ALIASES = {"zh": "zh-cn"}
 
@@ -46,6 +46,12 @@ class XTTSEngine(Engine):
         if cache.exists():
             d = torch.load(cache, map_location=self.device)
             lat = (d["gpt_cond_latent"].to(self.device), d["speaker_embedding"].to(self.device))
+        elif mix := mix_sources(voice):  # voix mélangée : moyenne pondérée des empreintes
+            lats = [self._conditioning(v) for v, _ in mix]
+            ws = [w for _, w in mix]
+            gpt, spk = weighted([g for g, _ in lats], ws), weighted([k for _, k in lats], ws)
+            torch.save({"gpt_cond_latent": gpt.cpu(), "speaker_embedding": spk.cpu()}, cache)
+            lat = (gpt, spk)
         else:
             if not voice.reference_path.exists():
                 raise EngineError("Cette voix n'a pas encore d'échantillon audio.")

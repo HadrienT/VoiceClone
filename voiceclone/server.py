@@ -81,6 +81,17 @@ class VoiceUpdate(BaseModel):
     settings: dict | None = None
 
 
+class MixSource(BaseModel):
+    voice_id: str
+    weight: float = Field(ge=0, le=100)
+
+
+class MixRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    sources: list[MixSource] = Field(min_length=2, max_length=5)
+    language: str | None = None
+
+
 class SampleOrder(BaseModel):
     files: list[str]  # noms des échantillons (ex. "003.wav") dans l'ordre voulu
 
@@ -312,6 +323,14 @@ def create_app() -> FastAPI:
             voices.delete(voice.id)
             raise
         return voice.to_dict()
+
+    @app.post("/api/voices/mix")
+    def mix_voices(body: MixRequest):
+        """Crée une voix intermédiaire (ex. 70 % voix A + 30 % voix B)."""
+        try:
+            return voices.create_mix(body.name, [(s.voice_id, s.weight) for s in body.sources], body.language).to_dict()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/voices/{voice_id}")
     def get_voice(voice_id: str):

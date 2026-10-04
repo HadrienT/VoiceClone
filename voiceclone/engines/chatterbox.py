@@ -6,7 +6,7 @@ import numpy as np
 
 from .. import audio
 from ..voices import Voice
-from .base import Engine, EngineError, split_text, to_numpy
+from .base import Engine, EngineError, mix_sources, split_text, to_numpy, weighted
 
 
 def ensure_perth() -> None:
@@ -80,8 +80,31 @@ class _ChatterboxTTSBase(Engine):
             self.model.conds = Conditionals.load(cache, map_location=self.device).to(self.device)
         else:
             self.model.prepare_conditionals(str(voice.reference_path), exaggeration=exaggeration)
+            if mix := mix_sources(voice):
+                self._blend_conds(mix, exaggeration)
             self.model.conds.save(cache)
         self._active_voice = key
+
+    def _blend_conds(self, mix, exaggeration: float) -> None:
+        """Voix mélangée : empreintes du locuteur (T3 et S3Gen) moyennées selon les poids ; les jetons
+        de prosodie viennent de la référence assemblée. Si la structure interne change, on garde
+        simplement la référence assemblée."""
+        mixed = self.model.conds
+        try:
+            parts = []
+            for v, _ in mix:
+                self._active_voice = None
+                self._set_voice(v, exaggeration)
+                parts.append(self.model.conds)
+            ws = [w for _, w in mix]
+            mixed.t3.speaker_emb = weighted([c.t3.speaker_emb for c in parts], ws)
+            mixed.gen["embedding"] = weighted([c.gen["embedding"] for c in parts], ws)
+        except Exception as exc:  # pragma: no cover - dépend de la version de chatterbox
+            import logging
+
+            logging.getLogger(__name__).warning("Mélange d'empreintes Chatterbox impossible (%s) : "
+                                                "référence assemblée utilisée.", exc)
+        self.model.conds = mixed
 
     def prepare_voice(self, voice: Voice) -> None:
         self._active_voice = None
@@ -178,6 +201,15 @@ class ChatterboxEngine(_ChatterboxTTSBase):
             self.vc.ref_dict = {k: (v.to(self.device) if torch.is_tensor(v) else v) for k, v in ref.items()}
         else:
             self.vc.set_target_voice(str(voice.reference_path))
+            if mix := mix_sources(voice):  # voix mélangée : empreinte du locuteur moyennée
+                mixed = self.vc.ref_dict
+                embs = []
+                for v, _ in mix:
+                    self._vc_voice = None
+                    self._set_vc_voice(v)
+                    embs.append(self.vc.ref_dict["embedding"])
+                mixed["embedding"] = weighted(embs, [w for _, w in mix])
+                self.vc.ref_dict = mixed
             torch.save({k: (v.cpu() if torch.is_tensor(v) else v) for k, v in self.vc.ref_dict.items()}, cache)
         self._vc_voice = key
 

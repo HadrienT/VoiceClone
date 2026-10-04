@@ -137,6 +137,21 @@
       </div>
 
       <div id="prep-report" class="card hidden"></div>
+      <details class="card mix-card" id="mix-card">
+        <summary><b>🎛 Mélanger des voix</b> <span class="muted">— créer une voix intermédiaire entre deux profils</span></summary>
+        <div class="row" style="align-items:flex-end;margin-top:12px">
+          <label class="field grow">Voix A <select id="mix-a"></select></label>
+          <label class="field grow">Dosage <span><b id="mix-pa">50</b> % A · <b id="mix-pb">50</b> % B</span>
+            <input type="range" id="mix-w" min="5" max="95" step="5" value="50"></label>
+          <label class="field grow">Voix B <select id="mix-b"></select></label>
+        </div>
+        <div class="row" style="align-items:flex-end">
+          <label class="field grow">Nom de la nouvelle voix <input id="mix-name" placeholder="Voix mélangée"></label>
+          <button class="btn primary" id="mix-go">Créer le mélange</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin:0">XTTS, OpenVoice et Chatterbox mélangent réellement les empreintes de voix ;
+          les autres modèles utilisent une référence assemblée d'extraits des deux voix.</p>
+      </details>
       <div id="voice-list" class="grid"></div>
     </section>
 

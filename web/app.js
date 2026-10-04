@@ -491,7 +491,43 @@ async function loadVoices() {
   state.voices = await api("/api/voices");
   renderVoices();
   refreshVoiceSelects();
+  refreshMixSelects();
 }
+
+// ---------------------------------------------------------------- voix : mélange
+function refreshMixSelects() {
+  const items = state.voices.filter((v) => v.duration > 0).map((v) => ({ value: v.id, label: v.name }));
+  fillSelect($("#mix-a"), items, { empty: "—" });
+  fillSelect($("#mix-b"), items, { empty: "—", value: $("#mix-b").value || items[1]?.value });
+  if ($("#mix-b").value === $("#mix-a").value) {
+    const other = items.find((i) => i.value !== $("#mix-a").value);
+    if (other) $("#mix-b").value = other.value;
+  }
+  $("#mix-card").classList.toggle("hidden", items.length < 2);
+  mixName();
+}
+function mixName() {
+  const a = getVoice($("#mix-a").value), b = getVoice($("#mix-b").value);
+  const w = +$("#mix-w").value;
+  $("#mix-pa").textContent = w;
+  $("#mix-pb").textContent = 100 - w;
+  if (a && b && (!$("#mix-name").value || $("#mix-name").dataset.auto)) {
+    $("#mix-name").value = `${a.name} × ${b.name} (${w}/${100 - w})`;
+    $("#mix-name").dataset.auto = "1";
+  }
+}
+["#mix-a", "#mix-b", "#mix-w"].forEach((id) => $(id).addEventListener("input", mixName));
+$("#mix-name").addEventListener("input", (e) => delete e.target.dataset.auto);
+$("#mix-go").addEventListener("click", (e) => busy(e.currentTarget, "Mélange…", async () => {
+  const w = +$("#mix-w").value;
+  try {
+    const v = await api("/api/voices/mix", { json: { name: $("#mix-name").value.trim() || "Voix mélangée",
+      sources: [{ voice_id: $("#mix-a").value, weight: w }, { voice_id: $("#mix-b").value, weight: 100 - w }] } });
+    $("#mix-name").value = "";
+    toast(`Voix « ${v.name} » créée.`, "ok");
+    await loadVoices();
+  } catch (err) { toast(err.message, "error"); }
+}));
 
 function renderVoices() {
   const asr = modelsWith("asr").filter(isReady);

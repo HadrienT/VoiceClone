@@ -54,7 +54,7 @@ Légende : effort **S** (quelques heures) · **M** (une journée) · **L** (plus
 |---|---|---|---|
 | 6.1 | Traduction vocale (tu parles français → ça sort en anglais avec ta voix) | M | ⚠ |
 | 6.2 | Mode livre audio (texte / .txt / .epub → chapitres audio, archive ZIP) | M | ☑ |
-| 6.3 | Mélange de voix (voix intermédiaire pondérée entre deux profils) | M | ☐ |
+| 6.3 | Mélange de voix (voix intermédiaire pondérée entre deux profils) | M | ⚠ |
 | 6.4 | Intégrations : page OBS, lecture du chat Twitch, bot Discord (file, voix par utilisateur) | M | ☐ |
 
 ## Lot 7 — Gros chantiers modèles (L)

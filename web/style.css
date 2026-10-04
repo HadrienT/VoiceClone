@@ -313,3 +313,4 @@ dialog.trimmer::backdrop { background: #0008; }
 .chapter-list audio { height: 32px; max-width: 280px; }
 .book { margin-bottom: 10px; }
 @media (max-width: 700px) { .chapter-list li { flex-wrap: wrap; } .chapter-list li > input[data-ch-title] { max-width: none; width: 100%; } }
+.mix-card summary { cursor: pointer; }
