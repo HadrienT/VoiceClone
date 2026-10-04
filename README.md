@@ -60,7 +60,7 @@ Chaque modèle a ses propres dépendances ; l'interface affiche la commande à l
 ```bash
 pip install coqui-tts                 # XTTS v2  (recommandé pour le français)
 pip install faster-whisper            # Whisper  (mode « transcription + TTS », transcription auto)
-pip install git+https://github.com/myshell-ai/OpenVoice.git   # OpenVoice V2 (live rapide)
+pip install --no-deps git+https://github.com/myshell-ai/OpenVoice.git && pip install librosa   # OpenVoice V2 (live rapide)
 pip install chatterbox-tts 'setuptools<81'   # Chatterbox (TTS multilingue + VC)
 pip install f5-tts                    # F5-TTS
 ```
@@ -255,5 +255,6 @@ Les tests utilisent un moteur factice : ils vérifient l'API, la gestion des voi
 - **Discord coupe la voix** : désactivez Krisp et la sensibilité automatique.
 - **Voix robotique en live** : augmentez la taille des morceaux et le contexte, vérifiez que le seuil de silence ne coupe pas vos fins de phrases.
 - **Fichier refusé** : installez `ffmpeg` pour les formats exotiques.
+- **OpenVoice : `Failed to build av==10.0.0`** : le `setup.py` d'OpenVoice fige de vieilles versions (faster-whisper 0.9, av 10, numpy 1.22, gradio 3…). Installez-le **sans ses dépendances** : `pip install --no-deps git+https://github.com/myshell-ai/OpenVoice.git && pip install librosa`. VoiceClone n'utilise que son convertisseur de timbre, qui n'a besoin que de torch, librosa et soundfile.
 - **`libnvrtc.so.13` / erreur `torchcodec`** : depuis PyTorch 2.9, `torchaudio` passe par `torchcodec`, qui doit être compilé pour la même version de CUDA que `torch`. VoiceClone lit l'audio de référence sans `torchcodec`, mais d'autres bibliothèques peuvent encore en avoir besoin. Pour réparer : `python -c "import torch; print(torch.__version__, torch.version.cuda)"`, puis réinstallez `torchcodec` depuis le même index que torch, par ex. `pip install --force-reinstall torchcodec --index-url https://download.pytorch.org/whl/cu128` (remplacez `cu128` par votre version de CUDA).
 - **F5-TTS : « besoin du texte exact »** : F5 doit connaître le texte prononcé dans l'échantillon. Renseignez-le dans *Mes voix → Échantillons & transcription*, ou téléchargez un modèle Whisper pour qu'il soit transcrit automatiquement (une seule fois, mis en cache). F5 n'utilise qu'un échantillon de 12 s maximum : pour un long enregistrement, découpez-le aux silences avec `python scripts/split_audio.py mon_audio.wav` et importez les morceaux dans la même voix. Si le fichier est déjà sur le serveur, `python scripts/add_samples.py "Ma voix" mon_audio.wav --split` le découpe et l'ajoute directement à la voix (sans passer par le navigateur ; `--list` affiche les voix, `--create NOM --consent` en crée une).
