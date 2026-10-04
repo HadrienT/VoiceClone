@@ -210,7 +210,8 @@ def finetune_xtts(job: Job, manager, voices: VoiceStore, voice_id: str, epochs: 
             job.update(0.05 + 0.9 * done / total, f"Époque {done + 1}/{total}")
 
     run_process(job, [python, "-m", "voiceclone.xtts_train", json.dumps(params)], cwd=config.ROOT_DIR,
-                env={"PYTHONPATH": str(config.ROOT_DIR)}, progress=progress, log_path=work / "train.log")
+                env={"PYTHONPATH": str(config.ROOT_DIR), **single_gpu_env()}, progress=progress,
+                log_path=work / "train.log")
     result = json.loads((work / "run" / "result.json").read_text(encoding="utf-8"))
     job.update(0.97, "Enregistrement du modèle…")
     model_id = f"xtts-ft-{voice.id}"[:60]
@@ -322,6 +323,20 @@ def manager_device() -> str:
     from . import device
 
     return device.get_device()
+
+
+def single_gpu_env(dev: str | None = None) -> dict:
+    """CUDA_VISIBLE_DEVICES limité au GPU utilisé par VoiceClone (ex. "cuda:1" → "1").
+
+    Le Trainer de coqui refuse de démarrer quand plusieurs GPU sont visibles ; dans le processus
+    d'entraînement, ce GPU devient alors « cuda:0 ».
+    """
+    dev = dev or manager_device()
+    if not dev.startswith("cuda"):
+        return {}
+    idx = int(dev.partition(":")[2] or 0)
+    visible = [v.strip() for v in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",") if v.strip()]
+    return {"CUDA_VISIBLE_DEVICES": visible[idx] if idx < len(visible) else str(idx)}
 
 
 def attach_rvc(voices: VoiceStore, voice_id: str, pth: bytes, index: bytes | None = None, version: str = "v2",

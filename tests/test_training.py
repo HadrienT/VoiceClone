@@ -179,3 +179,26 @@ def test_patch_coqui_before_tts_import(tmp_path):
     env = {**os.environ, "PYTHONPATH": f"{tmp_path}{os.pathsep}{config.ROOT_DIR}"}
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
+
+
+def test_single_gpu_env(monkeypatch):
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    assert training.single_gpu_env("cpu") == {}
+    assert training.single_gpu_env("cuda") == {"CUDA_VISIBLE_DEVICES": "0"}
+    assert training.single_gpu_env("cuda:1") == {"CUDA_VISIBLE_DEVICES": "1"}
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,3")  # le serveur ne voit déjà que les GPU 2 et 3
+    assert training.single_gpu_env("cuda:1") == {"CUDA_VISIBLE_DEVICES": "3"}
+
+
+def test_xtts_child_sees_one_gpu(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(training, "manager_device", lambda: "cuda:1")
+    seen = {}
+    real = training.run_process
+
+    def spy(job, cmd, cwd=None, env=None, **kw):
+        seen.update(env or {})
+        return real(job, cmd, cwd=cwd, env=env, **kw)
+
+    monkeypatch.setattr(training, "run_process", spy)
+    test_xtts_finetune_flow(client, tmp_path)
+    assert seen["CUDA_VISIBLE_DEVICES"] == "1"
