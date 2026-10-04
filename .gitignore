@@ -6,3 +6,4 @@ venv/
 data/
 *.egg-info/
 .pytest_cache/
+discord_bot/prefs.json

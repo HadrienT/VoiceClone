@@ -1350,3 +1350,12 @@ renderSayFavs();
 
 $("#live-target").addEventListener("change", () => { store.set("live.target", $("#live-target").value); onLiveModelChange(); });
 $("#live-lang").addEventListener("change", () => { if ($("#live-target").value) store.set("live.src", $("#live-lang").value); });
+
+// ------------------------------------------------ Intégrations (OBS)
+const obsUrl = `${location.origin}/obs.html?lines=2&size=40`;
+$("#obs-url").textContent = obsUrl;
+$("#obs-open").href = obsUrl;
+$("#obs-copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(obsUrl); toast("Adresse copiée.", "ok"); }
+  catch { toast("Copie impossible : sélectionnez l'adresse à la main.", "error"); }
+});

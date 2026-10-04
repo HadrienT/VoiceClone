@@ -157,6 +157,12 @@ def create_app() -> FastAPI:
     history = History()
     live = RealtimeSession(manager, voices)
     jobs = JobManager()
+    browser_sessions: list[BrowserRealtimeSession] = []  # Live lancés depuis un navigateur
+
+    def active_session():
+        """Live en cours (serveur ou navigateur, le plus récent) : cible du texte tapé et de la page OBS."""
+        running = [x for x in [live, *browser_sessions] if x.state == "running"]
+        return max(running, key=lambda x: x.started_at or 0) if running else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -798,8 +804,30 @@ def create_app() -> FastAPI:
 
     @app.post("/api/realtime/say")
     def rt_say(body: SayRequest):
-        live.say(body.text)
+        """Fait dire un texte au Live en cours (lancé depuis le serveur ou depuis un navigateur)."""
+        session = active_session()
+        if session is None:
+            raise HTTPException(409, "Aucun Live en cours : démarrez-le dans l'onglet Live / Discord.")
+        try:
+            session.say(body.text)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         return {"ok": True}
+
+    @app.get("/api/overlay")
+    def overlay(lines: int = 3):
+        """État résumé du Live pour la page OBS (sous-titres, indicateur de parole)."""
+        session = active_session()
+        if session is None:
+            return {"active": False, "speaking": False, "lines": []}
+        st = session.status()
+        voice = getattr(session, "voice", None)
+        recent = [t for t in st["transcripts"] if time.time() - t.get("at", 0) < 60][-max(1, min(lines, 10)):]
+        return {"active": True, "mode": st["config"]["mode"] if st["config"] else None,
+                "voice": voice.name if voice else None, "speaking": bool(st["output_db"] > -45),
+                "output_db": float(st["output_db"]), "input_db": float(st["input_db"]),
+                "lines": [{"text": t["text"], "translation": t.get("translation"), "typed": bool(t.get("typed")),
+                           "at": t["at"]} for t in recent]}
 
     @app.websocket("/api/realtime/ws")
     async def rt_browser(ws: WebSocket):
@@ -865,6 +893,7 @@ def create_app() -> FastAPI:
                                              out_sr=48000 if use_opus else None)
             outbox.put_nowait({"type": "loading"})
             await run_in_threadpool(session.start, cfg)  # charge les modèles (peut être long la 1re fois)
+            browser_sessions.append(session)
             outbox.put_nowait({"type": "started", "out_sample_rate": session.out_sr,
                                "codec": "opus" if use_opus else "pcm"})
             tasks.append(asyncio.create_task(status_pump()))
@@ -891,6 +920,8 @@ def create_app() -> FastAPI:
             for t in tasks:
                 t.cancel()
             if session is not None:
+                if session in browser_sessions:
+                    browser_sessions.remove(session)
                 await run_in_threadpool(session.stop)
             try:
                 await ws.close()

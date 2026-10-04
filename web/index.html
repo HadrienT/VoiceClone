@@ -244,6 +244,22 @@
       </header>
 
       <div class="card">
+        <h2>🎬 Intégrations : OBS, Twitch, bot Discord</h2>
+        <p><b>Sous-titres et indicateur de parole dans OBS</b> : ajoutez une <i>Source navigateur</i> avec cette adresse
+          (fond transparent, se met à jour seule pendant le Live) :</p>
+        <div class="pip"><code id="obs-url"></code><button class="btn small" id="obs-copy">Copier</button>
+          <a class="btn small" id="obs-open" target="_blank" rel="noopener">Ouvrir</a></div>
+        <p class="muted" style="font-size:13px">Options à ajouter à l'adresse : <code>&amp;size=48</code> (taille),
+          <code>&amp;lines=1</code>, <code>&amp;show=subs</code> ou <code>indicator</code>, <code>&amp;position=top</code>,
+          <code>&amp;translation=only</code>, <code>&amp;fade=0</code> (garder affiché),
+          <code>&amp;key=MOTDEPASSE</code> si l'interface est protégée.</p>
+        <p><b>Lire le chat Twitch</b> avec votre voix clonée pendant le Live :</p>
+        <div class="pip"><code>python integrations/twitch_tts.py --channel VOTRE_CHAINE --command "!tts" --cooldown 20</code></div>
+        <p><b>Bot Discord</b> (file d'attente, une voix par membre, lecture d'un salon textuel) :
+          <code>python discord_bot/bot.py</code> — voir le README.</p>
+      </div>
+
+      <div class="card">
         <div class="seg" id="live-where">
           <button data-where="browser" class="active">🖥️ Audio de ce PC <small>micro et sorties du PC où la page est ouverte</small></button>
           <button data-where="server">🗄️ Audio du serveur <small>seulement si VoiceClone tourne sur votre PC</small></button>

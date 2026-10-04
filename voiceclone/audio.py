@@ -84,7 +84,7 @@ def rms_db(x: np.ndarray) -> float:
     if len(x) == 0:
         return -120.0
     rms = float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
-    return 20.0 * np.log10(max(rms, 1e-6))
+    return float(20.0 * np.log10(max(rms, 1e-6)))
 
 
 def frame_rms_db(x: np.ndarray, sr: int, frame_ms: float = 30.0) -> np.ndarray:
