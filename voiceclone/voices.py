@@ -24,6 +24,9 @@ import numpy as np
 from . import audio, config
 
 STORE_SR = 24000
+TRAINING_SR = 44100  # l'audio d'entraînement garde plus de bande passante (RVC s'entraîne à 40-48 kHz)
+TRAINING_MIN_SNR_DB = 10.0
+TRAINING_WINDOW_S = 300  # un long enregistrement est traité par tranches de 5 min (mémoire)
 
 CONSENT_STATEMENTS = {
     "self": "Cette voix est la mienne.",
@@ -62,6 +65,9 @@ class Voice:
     settings: dict = field(default_factory=dict)  # réglages préférés : {"tts": {model_id, language, params}}
     consent: dict = field(default_factory=dict)  # trace du consentement : {confirmed, at, statement, source}
     mix: dict = field(default_factory=dict)  # voix mélangée : {"sources": [{"voice_id", "name", "weight"}]}
+    # audio d'entraînement (sans limite de durée, distinct de la référence de clonage) :
+    # [{"file": "training/00001.wav", "duration", "source", "transcript"}]
+    training: list = field(default_factory=list)
 
     @property
     def dir(self) -> Path:
@@ -83,6 +89,7 @@ class Voice:
     def to_dict(self) -> dict:
         d = asdict(self)
         d["duration"] = round(sum(s.duration for s in self.samples), 2)
+        d["training_duration"] = round(sum(t["duration"] for t in self.training), 1)
         return d
 
 
@@ -182,6 +189,73 @@ class VoiceStore:
             self._rebuild_reference(voice)
             self.save(voice)
         return voice
+
+    # ------------------------------------------------------- audio d'entraînement
+    def add_training_audio(self, voice_id: str, data: bytes, name: str = "", enhance: bool = True,
+                           method: str = "auto", progress=None) -> tuple[Voice, dict]:
+        """Ajoute un enregistrement de n'importe quelle durée à l'audio d'entraînement de la voix.
+
+        Il est nettoyé et découpé en phrases de 3 à 11 s (taille adaptée à XTTS) ; tous les passages
+        utilisables sont gardés (seuls les passages sans parole, saturés ou trop bruités sont écartés).
+        """
+        from .prep import auto_prepare
+
+        self.get(voice_id)
+        x, sr = audio.load_audio(data)
+        store_sr = min(sr, TRAINING_SR)
+        x = audio.resample(x, sr, store_sr)
+        window = TRAINING_WINDOW_S * store_sr
+        pieces, kept_s, rejected, details = [], 0.0, 0, {}
+        n_windows = max(1, -(-len(x) // window))
+        for w, start in enumerate(range(0, len(x), window)):
+            if progress:
+                progress(w / n_windows)
+            part = x[start: start + window]
+            if len(part) < store_sr * 2:
+                continue
+            # plus tolérant que l'import pour le clonage : pour l'entraînement, la quantité compte
+            kept, report = auto_prepare(part, store_sr, enhance=enhance, target_s=float("inf"), method=method,
+                                        min_snr_db=TRAINING_MIN_SNR_DB)
+            pieces += kept
+            kept_s += report["kept_duration"]
+            rejected += sum(1 for g in report["segments"] if not g["kept"])
+            details = {k: report[k] for k in ("denoised", "method", "fallback") if k in report}
+        with self._lock:
+            voice = self.get(voice_id)
+            (voice.dir / "training").mkdir(parents=True, exist_ok=True)
+            idx = 1 + max([int(Path(t["file"]).stem) for t in voice.training] or [0])
+            for piece in pieces:
+                rel = f"training/{idx:05d}.wav"
+                audio.save_wav(voice.dir / rel, piece, store_sr)
+                voice.training.append({"file": rel, "duration": round(len(piece) / store_sr, 2),
+                                       "source": name, "transcript": ""})
+                idx += 1
+            self.save(voice)
+        report = {"name": name, "duration": round(len(x) / store_sr, 1), "clips": len(pieces),
+                  "kept_duration": round(kept_s, 1), "rejected": rejected, **details}
+        return voice, report
+
+    def remove_training(self, voice_id: str, file: str | None = None) -> Voice:
+        """Retire un extrait d'entraînement (ou tous si file est None)."""
+        with self._lock:
+            voice = self.get(voice_id)
+            gone = [t for t in voice.training if file is None or t["file"] == file]
+            if file is not None and not gone:
+                raise KeyError("Extrait d'entraînement introuvable")
+            for t in gone:
+                (voice.dir / t["file"]).unlink(missing_ok=True)
+            voice.training = [t for t in voice.training if t not in gone]
+            self.save(voice)
+            return voice
+
+    def set_training_transcripts(self, voice_id: str, texts: dict[str, str]) -> Voice:
+        with self._lock:
+            voice = self.get(voice_id)
+            for t in voice.training:
+                if t["file"] in texts:
+                    t["transcript"] = texts[t["file"]].strip()
+            self.save(voice)
+            return voice
 
     def mix_sources(self, voice: Voice) -> list[tuple[Voice, float]]:
         """Voix sources et poids d'une voix mélangée (vide si ce n'en est pas une ou s'il en manque)."""

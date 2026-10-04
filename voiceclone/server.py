@@ -736,6 +736,56 @@ def create_app() -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
         return voice.to_dict()
 
+    @app.post("/api/voices/{voice_id}/training-audio")
+    async def add_training_audio(voice_id: str, files: list[UploadFile] = File(...), enhance: bool = Form(True),
+                                 method: str = Form("auto")):
+        """Audio d'entraînement sans limite de durée : nettoyé et découpé en tâche de fond (voir /api/jobs)."""
+        voice = voices.get(voice_id)
+        tmp = config.DATA_DIR / "tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        saved = []
+        for f in files:
+            path = tmp / f"{time.time_ns()}-{Path(f.filename or 'audio').name}"
+            with path.open("wb") as out:  # copie par blocs : les longs enregistrements ne passent pas en mémoire
+                while chunk := await f.read(1 << 20):
+                    out.write(chunk)
+            if path.stat().st_size == 0:
+                path.unlink()
+                raise HTTPException(400, f"Fichier vide : {f.filename}")
+            saved.append((path, f.filename or path.name))
+
+        def work(job):
+            reports = []
+            try:
+                for i, (path, name) in enumerate(saved):
+                    job.update(i / len(saved), f"{name} : nettoyage et découpage…")
+                    _, rep = voices.add_training_audio(
+                        voice_id, path.read_bytes(), name, enhance, method,
+                        progress=lambda p, i=i, name=name: job.update((i + p) / len(saved), f"{name} : {round(p * 100)} %"))
+                    reports.append(rep)
+            finally:
+                for path, _ in saved:
+                    path.unlink(missing_ok=True)
+            v = voices.get(voice_id)
+            return {"reports": reports, "clips": len(v.training), "training_duration": v.to_dict()["training_duration"]}
+
+        return jobs.submit("training-audio", f"📼 Audio d'entraînement · {voice.name}", work).to_dict()
+
+    @app.get("/api/voices/{voice_id}/training-audio/{name}")
+    def training_audio_file(voice_id: str, name: str):
+        voice = voices.get(voice_id)
+        if not any(t["file"] == f"training/{name}" for t in voice.training):
+            raise KeyError("Extrait d'entraînement introuvable")
+        return FileResponse(voice.dir / "training" / name, media_type="audio/wav")
+
+    @app.delete("/api/voices/{voice_id}/training-audio")
+    def clear_training_audio(voice_id: str):
+        return voices.remove_training(voice_id).to_dict()
+
+    @app.delete("/api/voices/{voice_id}/training-audio/{name}")
+    def delete_training_audio(voice_id: str, name: str):
+        return voices.remove_training(voice_id, f"training/{name}").to_dict()
+
     @app.delete("/api/voices/{voice_id}/rvc")
     def delete_rvc(voice_id: str):
         return training.detach_rvc(voices, voice_id).to_dict()

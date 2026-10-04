@@ -25,12 +25,16 @@ function renderVoiceInfo() {
   const v = voices.find((x) => x.id === $("#tr-voice").value);
   const xtts = models.find((m) => m.id === "xtts-v2");
   if (!v) { $("#tr-info").innerHTML = ""; return; }
-  const done = v.samples.filter((s) => s.transcript);
+  const clips = [...v.samples, ...(v.training || [])];
+  const done = clips.filter((s) => s.transcript);
   const secs = done.reduce((s, x) => s + x.duration, 0);
-  $("#tr-info").innerHTML = `<b>${esc(v.name)}</b> : ${v.samples.length} échantillon(s), ${v.duration} s —
-    ${done.length} transcrit(s) (${secs.toFixed(1)} s).
-    ${v.duration < 60 ? "<br>⚠ Moins d'une minute d'audio : l'affinage XTTS apporte surtout quelque chose à partir de 2-10 min de voix propre." : ""}
+  const total = v.duration + (v.training_duration || 0);
+  $("#tr-info").innerHTML = `<b>${esc(v.name)}</b> : ${fmtMin(total)} d'audio au total
+    (référence de clonage ${v.duration} s + audio d'entraînement ${fmtMin(v.training_duration || 0)}) —
+    ${done.length}/${clips.length} extraits transcrits (${fmtMin(secs)}).
+    ${total < 120 ? "<br>⚠ Moins de 2 minutes : ajoutez de l'audio d'entraînement ci-dessous (idéal 5 à 30 min)." : ""}
     ${xtts && !(xtts.downloaded && xtts.installed) ? "<br>⚠ XTTS v2 doit être téléchargé et installé (onglet Modèles)." : ""}`;
+  renderTrainingAudio(v);
   const rvc = v.settings?.rvc;
   $("#rvc-current").innerHTML = rvc?.pth
     ? `✅ Modèle RVC attaché (${esc(rvc.source || "")}${rvc.index ? ", avec index" : ", sans index"}).
@@ -38,6 +42,58 @@ function renderVoiceInfo() {
        <br><small class="muted">Utilisez le modèle « RVC » dans Voix → Voix ou le Live avec cette voix.</small>`
     : `<span class="muted">Aucun modèle RVC pour cette voix.</span>`;
 }
+
+const fmtMin = (s) => (s >= 90 ? `${(s / 60).toFixed(1)} min` : `${Math.round(s)} s`);
+
+function renderTrainingAudio(v) {
+  const list = v.training || [];
+  const shown = list.slice(0, 200);
+  $("#tr-audio").innerHTML = list.length ? `<div class="row" style="align-items:center;margin:0 0 6px">
+      <b class="grow">${list.length} extraits · ${fmtMin(v.training_duration)}
+        <small class="muted">(${list.filter((t) => t.transcript).length} transcrits)</small></b>
+      <button class="btn small danger" id="tr-clear">Tout supprimer</button></div>
+    <details><summary class="muted" style="cursor:pointer;font-size:13px">Écouter / retirer des extraits</summary>
+      <ol class="chapter-list">${shown.map((t) => {
+        const name = t.file.split("/")[1];
+        return `<li><span class="grow" title="${esc(t.transcript || "")}">${esc(t.source || name)}
+            <small class="muted">${t.duration} s${t.transcript ? ` · « ${esc(t.transcript.slice(0, 60))} »` : ""}</small></span>
+          <audio controls preload="none" src="/api/voices/${v.id}/training-audio/${name}"></audio>
+          <button class="btn small" data-tr-del="${name}" title="Retirer">✕</button></li>`;
+      }).join("")}${list.length > shown.length ? `<li class="muted">… et ${list.length - shown.length} autres</li>` : ""}</ol>
+    </details>` : '<p class="muted" style="margin:0">Aucun audio d\'entraînement pour cette voix.</p>';
+}
+
+async function uploadTraining(files) {
+  const voiceId = $("#tr-voice").value;
+  if (!voiceId) return toast("Créez d'abord une voix.", "error");
+  const out = $("#tr-upload-progress");
+  const fd = new FormData();
+  files.forEach((f) => fd.append("files", f, f.name));
+  fd.append("enhance", $("#tr-enhance").checked);
+  out.classList.remove("hidden");
+  out.innerHTML = `<span class="spinner"></span> Envoi de ${files.length} fichier(s)…`;
+  try {
+    const job = await api(`/api/voices/${voiceId}/training-audio`, { method: "POST", body: fd });
+    const done = await watchJob(job.id, (j) => { out.innerHTML = jobProgressHtml(j); });
+    out.innerHTML = `<div class="notice ok">${done.result.reports.map((r) => `✅ ${esc(r.name)} : ${fmtMin(r.duration)} analysées →
+      <b>${r.clips} extraits, ${fmtMin(r.kept_duration)} gardées</b>${r.rejected ? ` (${r.rejected} passages écartés)` : ""}${r.fallback ? `<br>⚠ ${esc(r.fallback)}` : ""}`).join("<br>")}</div>`;
+    await showTraining();
+  } catch (err) {
+    out.innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+  }
+}
+
+const drop = $("#tr-drop");
+drop.addEventListener("click", () => $("#tr-file").click());
+$("#tr-file").addEventListener("change", (e) => { const f = [...e.target.files]; e.target.value = ""; if (f.length) uploadTraining(f); });
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  drop.classList.remove("over");
+  const files = [...e.dataTransfer.files].filter((f) => /^(audio|video)/.test(f.type) || /\.(wav|mp3|m4a|ogg|flac|webm|opus|aac|mp4)$/i.test(f.name));
+  if (files.length) uploadTraining(files); else toast("Déposez un fichier audio.", "error");
+});
 
 async function renderTrained() {
   const list = await api("/api/training/models");
@@ -87,6 +143,15 @@ $("#rvc-upload").addEventListener("click", (e) => busy(e.currentTarget, "Import�
   } catch (err) { toast(err.message, "error"); }
 }));
 document.addEventListener("click", async (e) => {
+  const trDel = e.target.closest("[data-tr-del]");
+  if (trDel || e.target.closest("#tr-clear")) {
+    if (!trDel && !confirm("Supprimer tout l'audio d'entraînement de cette voix ?")) return;
+    try {
+      await api(`/api/voices/${$("#tr-voice").value}/training-audio${trDel ? `/${trDel.dataset.trDel}` : ""}`, { method: "DELETE" });
+      await showTraining();
+    } catch (err) { toast(err.message, "error"); }
+    return;
+  }
   if (e.target.closest("#rvc-detach")) {
     await api(`/api/voices/${$("#tr-voice").value}/rvc`, { method: "DELETE" });
     return showTraining();

@@ -261,7 +261,8 @@ L'onglet **Livre audio** découpe un `.epub` (ordre de lecture, titres des chapi
 
 ## 🎓 Entraînement
 
-- **Affiner XTTS v2** : à partir des échantillons transcrits de la voix (Whisper complète les transcriptions manquantes), entraîne le GPT de XTTS dans un processus séparé (progression par époque, annulation). Le modèle obtenu apparaît dans le catalogue (« XTTS · votre voix ») et devient le modèle préféré de la voix. Idéal : 5 à 30 min de voix propre ; GPU ≥ 12 Go conseillé (lot 2, accumulation 4).
+- **Audio d'entraînement** : la référence de clonage d'une voix est limitée à 30 s ; pour entraîner, ajoutez vos longs enregistrements dans *Entraînement → Audio d'entraînement* (aucune limite de durée : tout est nettoyé et découpé en phrases de 3 à 11 s, seuls les passages inutilisables sont écartés). Fichiers déjà sur le serveur : `python scripts/add_samples.py "Ma voix" interview.wav --training`.
+- **Affiner XTTS v2** : à partir de l'audio d'entraînement et des échantillons transcrits de la voix (Whisper complète les transcriptions manquantes), entraîne le GPT de XTTS dans un processus séparé (progression par époque, annulation). Le modèle obtenu apparaît dans le catalogue (« XTTS · votre voix ») et devient le modèle préféré de la voix. Idéal : 5 à 30 min de voix propre ; GPU ≥ 12 Go conseillé (lot 2, accumulation 4).
 - **RVC** : importez un modèle `.pth` (+ `.index`) entraîné ailleurs, ou entraînez-le depuis l'interface avec [Applio](https://github.com/IAHispano/Applio) installé à part (dossier à indiquer dans Diagnostic → Réglages). Utilisez ensuite le modèle « RVC » en Voix → Voix ou en Live.
 
 ## 🔐 Sécurité et éthique

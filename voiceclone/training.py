@@ -145,6 +145,18 @@ def build_xtts_dataset(voice: Voice, out: Path, transcribe=None, language: str |
     wavs = out / "wavs"
     wavs.mkdir(parents=True, exist_ok=True)
     rows = []
+    learned: dict[str, str] = {}  # transcriptions obtenues pour l'audio d'entraînement (mises en cache)
+    for t in voice.training:  # audio d'entraînement : déjà en phrases de 3 à 11 s
+        x, _ = audio.load_audio(voice.dir / t["file"], target_sr=XTTS_SR)
+        text = t.get("transcript") or ""
+        if not text and transcribe is not None:
+            text = learned[t["file"]] = transcribe(x, XTTS_SR)
+        text = re.sub(r"\s+", " ", (text or "").replace("|", " ")).strip()
+        if not text or len(x) < XTTS_SR:
+            continue
+        name = f"t_{Path(t['file']).stem}.wav"
+        audio.save_wav(wavs / name, x, XTTS_SR)
+        rows.append((f"wavs/{name}", text, len(x) / XTTS_SR))
     for s in voice.samples:
         x, sr = audio.load_audio(voice.dir / s.file, target_sr=XTTS_SR)
         clips = [x] if len(x) <= MAX_CLIP_S * XTTS_SR else split(x, XTTS_SR, 3.0, MAX_CLIP_S)
@@ -161,8 +173,8 @@ def build_xtts_dataset(voice: Voice, out: Path, transcribe=None, language: str |
             audio.save_wav(wavs / name, clip, XTTS_SR)
             rows.append((f"wavs/{name}", text, len(clip) / XTTS_SR))
     if len(rows) < 2:
-        raise ValueError("Pas assez d'audio transcrit : il faut au moins 2 extraits avec leur texte "
-                         "(transcrivez la voix avec Whisper dans Mes voix).")
+        raise ValueError("Pas assez d'audio transcrit : il faut au moins 2 extraits avec leur texte. Ajoutez de "
+                         "l'audio d'entraînement et choisissez un modèle Whisper pour le transcrire.")
     n_eval = max(1, round(len(rows) * 0.15))
     rng = np.random.default_rng(0)
     order = rng.permutation(len(rows))
@@ -173,7 +185,7 @@ def build_xtts_dataset(voice: Voice, out: Path, transcribe=None, language: str |
         (out / fname).write_text(header + "\n".join(lines) + "\n", encoding="utf-8")
     total = sum(r[2] for r in rows)
     return {"clips": len(rows), "seconds": round(total, 1), "train": len(rows) - n_eval, "eval": n_eval,
-            "language": language or voice.language}
+            "language": language or voice.language, "learned": learned}
 
 
 def finetune_xtts(job: Job, manager, voices: VoiceStore, voice_id: str, epochs: int = 10, batch_size: int = 2,
@@ -195,6 +207,9 @@ def finetune_xtts(job: Job, manager, voices: VoiceStore, voice_id: str, epochs: 
             with manager.infer_lock:
                 return asr.transcribe(x, sr, voice.language)
     info = build_xtts_dataset(voice, work / "dataset", transcribe, language)
+    learned = info.pop("learned")
+    if learned:  # transcriptions gardées : le prochain entraînement ne refait pas ce travail
+        voices.set_training_transcripts(voice.id, learned)
     job.update(0.05, f"Jeu de données : {info['clips']} extraits, {info['seconds']} s. Entraînement…")
     # libère le GPU pour l'entraînement
     manager.unload_all()
@@ -280,8 +295,8 @@ def applio_paths() -> tuple[Path, str]:
 def train_rvc(job: Job, manager, voices: VoiceStore, voice_id: str, epochs: int = 200, batch_size: int = 8,
               sample_rate: int = 40000, save_every: int = 25) -> dict:
     voice = voices.get(voice_id)
-    if not voice.samples:
-        raise ValueError("Cette voix n'a pas d'échantillons.")
+    if not voice.samples and not voice.training:
+        raise ValueError("Cette voix n'a pas d'audio : ajoutez de l'audio d'entraînement.")
     applio, python = applio_paths()
     name = re.sub(r"[^a-zA-Z0-9_-]", "_", voice.id)[:40]
     work = training_dir("rvc", voice.id)
@@ -289,6 +304,8 @@ def train_rvc(job: Job, manager, voices: VoiceStore, voice_id: str, epochs: int 
     dataset.mkdir()
     for s in voice.samples:
         shutil.copy2(voice.dir / s.file, dataset / Path(s.file).name)
+    for t in voice.training:
+        shutil.copy2(voice.dir / t["file"], dataset / f"t_{Path(t['file']).name}")
     manager.unload_all()
     dev = manager_device()
     gpu = (dev.partition(":")[2] or "0") if dev.startswith("cuda") else "-"
