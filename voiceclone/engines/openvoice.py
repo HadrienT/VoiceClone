@@ -32,9 +32,22 @@ def _import_tone_color_converter():
         for name in [m for m in sys.modules if m == "openvoice.text" or m.startswith("openvoice.text.")]:
             del sys.modules[name]
         sys.modules["openvoice.text"] = stub
-    from openvoice.api import ToneColorConverter
+    from openvoice.api import OpenVoiceBaseClass, ToneColorConverter
 
-    return ToneColorConverter
+    class Converter(ToneColorConverter):
+        """ToneColorConverter sans le modèle de filigrane `wavmark`.
+
+        Son __init__ transmet `enable_watermark` à la classe parente, qui le refuse : l'option est
+        inutilisable et `wavmark` (paquet non maintenu) devient obligatoire. VoiceClone appelle
+        directement `model.voice_conversion`, sans le filigrane d'OpenVoice : on ne le charge pas.
+        """
+
+        def __init__(self, config_path, device="cuda:0"):
+            OpenVoiceBaseClass.__init__(self, config_path, device=device)
+            self.watermark_model = None
+            self.version = getattr(self.hps, "_version_", "v1")
+
+    return Converter
 
 
 class OpenVoiceEngine(Engine):
@@ -42,10 +55,7 @@ class OpenVoiceEngine(Engine):
         ToneColorConverter = _import_tone_color_converter()
 
         conv_dir = self.model_dir / "converter"
-        try:
-            tcc = ToneColorConverter(str(conv_dir / "config.json"), device=self.device, enable_watermark=False)
-        except TypeError:  # anciennes versions sans l'argument
-            tcc = ToneColorConverter(str(conv_dir / "config.json"), device=self.device)
+        tcc = ToneColorConverter(str(conv_dir / "config.json"), device=self.device)
         tcc.load_ckpt(str(conv_dir / "checkpoint.pth"))
         self.tcc = tcc
         self.hps = tcc.hps
