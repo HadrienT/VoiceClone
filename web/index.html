@@ -116,7 +116,12 @@
 
         <label class="check">
           <input type="checkbox" id="nv-consent">
-          Je confirme que cette voix est la mienne ou que j'ai l'autorisation explicite de la personne.
+          <span>Je confirme avoir le droit d'utiliser cette voix :
+            <select id="nv-consent-owner" style="padding:2px 6px">
+              <option value="self">c'est ma voix</option>
+              <option value="other">j'ai l'autorisation explicite de la personne</option>
+            </select>
+            <small class="muted">(enregistré avec la voix, daté)</small></span>
         </label>
         <div class="actions">
           <button class="btn primary" id="create-voice" disabled>Créer la voix</button>
@@ -149,9 +154,11 @@
           <div id="tts-params" class="params"></div>
         </details>
         <div class="actions">
+          <button class="btn" id="tts-compare" title="Générer le même texte avec plusieurs modèles">⚖ Comparer des modèles</button>
           <button class="btn primary" id="tts-go">Générer ▶</button>
         </div>
         <div id="tts-result" class="result hidden"></div>
+        <div id="tts-compare-box" class="result hidden"></div>
       </div>
     </section>
 
@@ -296,8 +303,15 @@
     <section id="tab-history" class="tab">
       <header class="page-head">
         <h1>Historique</h1>
-        <p>Vos dernières générations.</p>
+        <p>Vos dernières générations. Les favoris ★ ne sont jamais supprimés automatiquement.</p>
       </header>
+      <div class="row">
+        <label class="field grow">Rechercher <input id="hist-q" placeholder="Texte, voix, modèle…"></label>
+        <label class="field">Type <select id="hist-kind">
+          <option value="">Tout</option><option value="tts">Texte → Voix</option><option value="s2s">Voix → Voix</option>
+        </select></label>
+        <label class="check" style="margin:0 0 8px"><input type="checkbox" id="hist-fav"> Favoris seulement</label>
+      </div>
       <div id="history-list" class="history"></div>
     </section>
   </main>

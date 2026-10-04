@@ -29,7 +29,7 @@ from .realtime import (
     list_devices,
 )
 from .registry import get_model
-from .voices import VoiceStore
+from .voices import VoiceStore, consent_record
 
 log = logging.getLogger("voiceclone")
 
@@ -50,6 +50,15 @@ class VoiceUpdate(BaseModel):
     language: str | None = None
     description: str | None = None
     transcript: str | None = None
+    settings: dict | None = None
+
+
+class SampleOrder(BaseModel):
+    files: list[str]  # noms des échantillons (ex. "003.wav") dans l'ordre voulu
+
+
+class HistoryUpdate(BaseModel):
+    favorite: bool | None = None
 
 
 class TranscriptsUpdate(BaseModel):
@@ -198,6 +207,7 @@ def create_app() -> FastAPI:
         language: str = Form("fr"),
         description: str = Form(""),
         consent: bool = Form(False),
+        consent_owner: str = Form("self"),
         transcript: str = Form(""),
         source: str = Form("upload"),
         files: list[UploadFile] = File(default=[]),
@@ -205,7 +215,7 @@ def create_app() -> FastAPI:
         if not consent:
             raise HTTPException(400, "Vous devez confirmer avoir le droit d'utiliser cette voix.")
         payloads = [(await read_upload(f), f.filename or "") for f in files]
-        voice = voices.create(name, language, description)
+        voice = voices.create(name, language, description, consent=consent_record(consent_owner, "web"))
         try:
             for data, fname in payloads:
                 voice = voices.add_sample(voice.id, data, source=source, original_name=fname,
@@ -275,6 +285,11 @@ def create_app() -> FastAPI:
         voice, report = await run_in_threadpool(work)
         return {"voice": voice.to_dict(), "report": report}
 
+    @app.put("/api/voices/{voice_id}/order")
+    def reorder_samples(voice_id: str, body: SampleOrder):
+        """Ordre des échantillons : le premier sert de référence principale (Chatterbox n'en écoute que 10 s)."""
+        return voices.reorder(voice_id, [f"samples/{f}" for f in body.files]).to_dict()
+
     @app.delete("/api/voices/{voice_id}/samples/{name}")
     def delete_sample(voice_id: str, name: str):
         return voices.remove_sample(voice_id, f"samples/{name}").to_dict()
@@ -333,6 +348,7 @@ def create_app() -> FastAPI:
             wav, sr = engine.tts(req.text, voice, req.language, **req.params)
         elapsed = time.time() - t0
         item = history.add(wav, sr, kind="tts", model_id=req.model_id, voice_id=voice.id, voice_name=voice.name,
+                           params=req.params,
                            text=req.text[:500], language=req.language, seconds=round(elapsed, 2))
         return Response(audio.to_wav_bytes(wav, sr), media_type="audio/wav", headers={
             "X-History-Id": item["id"], "X-Generation-Seconds": f"{elapsed:.2f}",
@@ -396,8 +412,16 @@ def create_app() -> FastAPI:
         return history.list(limit)
 
     @app.get("/api/history/{item_id}/audio")
-    def history_audio(item_id: str):
-        return FileResponse(history.path(item_id), media_type="audio/wav", filename=f"voiceclone-{item_id}.wav")
+    def history_audio(item_id: str, format: str = "wav"):
+        path = history.path(item_id)
+        if format == "mp3":
+            return Response(audio.encode_mp3(path), media_type="audio/mpeg",
+                            headers={"Content-Disposition": f'attachment; filename="voiceclone-{item_id}.mp3"'})
+        return FileResponse(path, media_type="audio/wav", filename=f"voiceclone-{item_id}.wav")
+
+    @app.patch("/api/history/{item_id}")
+    def update_history(item_id: str, body: HistoryUpdate):
+        return history.update(item_id, **body.model_dump(exclude_none=True))
 
     @app.delete("/api/history/{item_id}")
     def delete_history(item_id: str):

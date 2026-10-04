@@ -45,6 +45,15 @@ class History:
             raise KeyError(item_id)
         return p
 
+    def update(self, item_id: str, **fields) -> dict:
+        self.path(item_id)
+        meta = self.root / f"{item_id}.json"
+        item = json.loads(meta.read_text(encoding="utf-8"))
+        if "favorite" in fields:
+            item["favorite"] = bool(fields["favorite"])
+        meta.write_text(json.dumps(item, ensure_ascii=False), encoding="utf-8")
+        return item
+
     def delete(self, item_id: str) -> None:
         self.path(item_id).unlink(missing_ok=True)
         (self.root / f"{item_id}.json").unlink(missing_ok=True)
@@ -52,5 +61,10 @@ class History:
     def _prune(self) -> None:
         metas = sorted(self.root.glob("*.json"))
         for f in metas[:-MAX_ITEMS]:
+            try:
+                if json.loads(f.read_text(encoding="utf-8")).get("favorite"):
+                    continue  # les favoris ne sont jamais supprimés automatiquement
+            except Exception:
+                pass
             f.unlink(missing_ok=True)
             f.with_suffix(".wav").unlink(missing_ok=True)

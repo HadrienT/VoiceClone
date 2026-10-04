@@ -468,6 +468,7 @@ $("#create-voice").addEventListener("click", (e) => busy(e.currentTarget, $("#sm
     fd.append("name", $("#nv-name").value.trim());
     fd.append("language", $("#nv-lang").value);
     fd.append("consent", $("#nv-consent").checked);
+    fd.append("consent_owner", $("#nv-consent-owner").value);
     const fileName = (p) => (p.source === "upload" ? p.name : `${p.name}.wav`);
     let voice;
     if ($("#smart-on").checked) {
@@ -529,11 +530,16 @@ function renderVoices() {
       <details data-details ${openDetails.has(v.id) ? "open" : ""}>
         <summary>Échantillons (${v.samples.length}) & transcription ${v.samples.length && v.samples.every((s) => s.transcript) ? "📝" : ""}</summary>
         <div class="samples">
-          ${v.samples.map((s) => {
+          ${v.samples.map((s, i) => {
             const name = s.file.split("/").pop();
             return `<div class="sample-block">
-              <div class="sample"><span class="name">${{ record: "🎤", system: "🖥️" }[s.source] || "📁"} ${esc(s.original_name || s.file)} · ${s.duration}s</span>
+              <div class="sample"><span class="name">${i === 0 && v.samples.length > 1 ? '<span class="badge ok" title="Référence principale : Chatterbox n\'écoute que ses 10 premières secondes">★ principal</span> ' : ""}${{ record: "🎤", system: "🖥️" }[s.source] || "📁"} ${esc(s.original_name || s.file)} · ${s.duration}s</span>
                 <audio controls preload="none" src="/api/voices/${v.id}/audio?sample=${encodeURIComponent(name)}&t=${t}"></audio>
+                ${v.samples.length > 1 ? `<span class="order-btns">
+                  <button class="btn small" data-move="${esc(name)}" data-to="first" title="Mettre en premier (référence principale)" ${i === 0 ? "disabled" : ""}>★</button>
+                  <button class="btn small" data-move="${esc(name)}" data-to="up" title="Monter" ${i === 0 ? "disabled" : ""}>↑</button>
+                  <button class="btn small" data-move="${esc(name)}" data-to="down" title="Descendre" ${i === v.samples.length - 1 ? "disabled" : ""}>↓</button>
+                </span>` : ""}
                 <button class="btn small danger" data-rm-sample="${esc(name)}">✕</button></div>
               <textarea rows="2" data-sample-text="${esc(name)}" placeholder="Texte exact prononcé dans cet échantillon (vide = inconnu)">${esc(s.transcript)}</textarea>
             </div>`;
@@ -555,7 +561,7 @@ function renderVoices() {
       </details>
       <div class="prep">
         <select data-prep-model>${prepModels.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("") || '<option value="">Aucun modèle prêt</option>'}</select>
-        <button class="btn small" data-prepare ${prepModels.length ? "" : "disabled"} title="Pré-calcule l'empreinte vocale pour ce modèle">🧬 Entraîner</button>
+        <button class="btn small" data-prepare ${prepModels.length ? "" : "disabled"} title="Pré-calcule l'empreinte vocale pour ce modèle (sinon faite à la 1re utilisation)">🧬 Préparer</button>
         <button class="btn small danger" data-del-voice>Supprimer</button>
       </div>
     </div>`;
@@ -582,6 +588,14 @@ $("#voice-list").addEventListener("click", async (e) => {
       if (!confirm("Supprimer définitivement cette voix ?")) return;
       await api(`/api/voices/${id}`, { method: "DELETE" });
       toast("Voix supprimée", "ok");
+    } else if (btn.dataset.move) {
+      const v = getVoice(id);
+      const files = v.samples.map((x) => x.file.split("/").pop());
+      const i = files.indexOf(btn.dataset.move);
+      files.splice(i, 1);
+      const j = { first: 0, up: Math.max(0, i - 1), down: Math.min(files.length, i + 1) }[btn.dataset.to];
+      files.splice(j, 0, btn.dataset.move);
+      await api(`/api/voices/${id}/order`, { method: "PUT", json: { files } });
     } else if (btn.dataset.rmSample) {
       await api(`/api/voices/${id}/samples/${encodeURIComponent(btn.dataset.rmSample)}`, { method: "DELETE" });
     } else if (btn.hasAttribute("data-smart-import")) {
@@ -637,7 +651,7 @@ $("#voice-list").addEventListener("click", async (e) => {
       else toast("Whisper n'a reconnu aucune parole dans ces échantillons. Vérifiez la langue de la voix ou tapez le texte à la main.", "error", 9000);
     } else if (btn.hasAttribute("data-prepare")) {
       const model = $("[data-prep-model]", card).value;
-      const r = await busy(btn, "Entraînement…", () => api(`/api/voices/${id}/prepare`, { json: { model_id: model } }));
+      const r = await busy(btn, "Préparation…", () => api(`/api/voices/${id}/prepare`, { json: { model_id: model } }));
       toast(`Empreinte vocale prête en ${r.seconds} s`, "ok");
       loadModels();
     } else return;
@@ -667,7 +681,21 @@ function onTTSModelChange() {
 }
 $("#tts-model").addEventListener("change", onTTSModelChange);
 $("#tts-lang").addEventListener("change", () => store.set("tts.lang", $("#tts-lang").value));
-$("#tts-voice").addEventListener("change", () => store.set("voice", $("#tts-voice").value));
+/** Applique les réglages mémorisés pour cette voix (modèle, langue, paramètres). */
+function applyVoiceSettings() {
+  const v = getVoice($("#tts-voice").value);
+  const st = v?.settings?.tts;
+  if (!st) return;
+  if (st.params && st.model_id) store.set(`params.${st.model_id}`, st.params);
+  if (st.model_id && getModel(st.model_id)) {
+    $("#tts-model").value = st.model_id;
+    state.ttsParamsFor = null; // force le rendu des paramètres mémorisés
+  }
+  if (st.language) store.set("tts.lang", st.language);
+  onTTSModelChange();
+  if (st.language) $("#tts-lang").value = st.language;
+}
+$("#tts-voice").addEventListener("change", () => { store.set("voice", $("#tts-voice").value); applyVoiceSettings(); });
 $("#tts-text").addEventListener("input", () => { $("#tts-count").textContent = $("#tts-text").value.length; });
 $("#tts-text").value = store.get("tts.text", "");
 $("#tts-count").textContent = $("#tts-text").value.length;
@@ -695,8 +723,49 @@ $("#tts-go").addEventListener("click", (e) => {
       const gen = res.headers.get("X-Generation-Seconds");
       const dur = res.headers.get("X-Audio-Seconds");
       showResult($("#tts-result"), await res.blob(), `${dur} s d'audio générées en ${gen} s`);
+      // mémorise ces réglages comme préférés pour cette voix
+      const settings = { tts: { model_id: $("#tts-model").value, language: $("#tts-lang").value, params: readParams($("#tts-params")) } };
+      api(`/api/voices/${$("#tts-voice").value}`, { method: "PATCH", json: { settings } })
+        .then((v) => { const i = state.voices.findIndex((x) => x.id === v.id); if (i >= 0) state.voices[i] = v; })
+        .catch(() => {});
       loadModels();
     } catch (err) { toast(err.message, "error"); }
+  });
+});
+
+$("#tts-compare").addEventListener("click", (e) => {
+  const text = $("#tts-text").value.trim();
+  if (!text) return toast("Écrivez un texte.", "error");
+  if (!$("#tts-voice").value) return toast("Créez d'abord une voix.", "error");
+  const ready = modelsWith("tts").filter(isReady);
+  if (ready.length < 2) return toast("Il faut au moins deux modèles TTS installés et téléchargés pour comparer.", "error", 7000);
+  const box = $("#tts-compare-box");
+  box.classList.remove("hidden");
+  box.innerHTML = `<h3 style="margin:0">⚖ Comparer — même texte, même voix</h3>
+    <div class="badges">${ready.map((m) => `<label class="check" style="margin:0"><input type="checkbox" data-cmp="${m.id}" checked> ${esc(m.name)}</label>`).join("")}</div>
+    <div class="actions" style="justify-content:flex-start"><button class="btn primary small" data-cmp-go>Lancer la comparaison</button></div>
+    <div class="compare-grid"></div>`;
+});
+$("#tts-compare-box").addEventListener("click", (e) => {
+  const go = e.target.closest("[data-cmp-go]");
+  if (!go) return;
+  const ids = $$("[data-cmp]:checked").map((c) => c.dataset.cmp);
+  const grid = $(".compare-grid", e.currentTarget);
+  grid.innerHTML = ids.map((id) => `<div class="card cmp" data-cmp-cell="${id}"><b>${esc(getModel(id).name)}</b><p class="muted"><span class="spinner"></span> en attente…</p></div>`).join("");
+  return busy(go, "Comparaison…", async () => {
+    for (const id of ids) {
+      const cell = $(`[data-cmp-cell="${id}"]`, grid);
+      const lang = getModel(id).languages.includes($("#tts-lang").value) ? $("#tts-lang").value : getModel(id).languages[0];
+      try {
+        const res = await api("/api/tts", { raw: true, json: { model_id: id, voice_id: $("#tts-voice").value, text: $("#tts-text").value.trim(), language: lang, params: store.get(`params.${id}`, {}) } });
+        const url = URL.createObjectURL(await res.blob());
+        cell.innerHTML = `<b>${esc(getModel(id).name)}</b><audio controls src="${url}"></audio>
+          <p class="muted" style="margin:0;font-size:12px">${res.headers.get("X-Audio-Seconds")} s générées en ${res.headers.get("X-Generation-Seconds")} s · langue ${esc(langName(lang))}</p>`;
+      } catch (err) {
+        cell.innerHTML = `<b>${esc(getModel(id).name)}</b><p class="notice error" style="margin:4px 0 0">${esc(err.message)}</p>`;
+      }
+    }
+    loadModels();
   });
 });
 
@@ -1005,21 +1074,56 @@ async function pollLive(force) {
 // ---------------------------------------------------------------- historique
 async function loadHistory() {
   try {
-    const items = await api("/api/history");
-    $("#history-list").innerHTML = items.map((h) => `<div class="card h-item">
+    state.history = await api("/api/history?limit=200");
+    renderHistory();
+  } catch (err) { toast(err.message, "error"); }
+}
+
+function renderHistory() {
+  const q = $("#hist-q").value.trim().toLowerCase();
+  const kind = $("#hist-kind").value;
+  const favOnly = $("#hist-fav").checked;
+  const items = (state.history || []).filter((h) => (!kind || h.kind === kind) && (!favOnly || h.favorite)
+    && (!q || [h.text, h.voice_name, getModel(h.model_id)?.name || h.model_id].join(" ").toLowerCase().includes(q)));
+  $("#history-list").innerHTML = items.map((h) => `<div class="card h-item">
       <div><div class="txt">${h.kind === "tts" ? "💬" : "🔁"} ${esc(h.text || (h.kind === "s2s" ? "Conversion de voix" : ""))}</div>
         <div class="sub">${esc(h.voice_name || "")} · ${esc(getModel(h.model_id)?.name || h.model_id)} · ${h.duration} s · ${new Date(h.created_at * 1000).toLocaleString("fr-FR")}</div></div>
       <audio controls preload="none" src="/api/history/${h.id}/audio"></audio>
-      <div class="badges"><a class="btn small" href="/api/history/${h.id}/audio" download>⬇</a>
+      <div class="badges">
+        <button class="btn small" data-fav-hist="${h.id}" title="Favori">${h.favorite ? "★" : "☆"}</button>
+        ${h.kind === "tts" && h.text ? `<button class="btn small" data-reuse-hist="${h.id}" title="Reprendre ces réglages dans Texte → Voix">↻</button>` : ""}
+        <a class="btn small" href="/api/history/${h.id}/audio" download title="WAV">⬇</a>
+        <a class="btn small" href="/api/history/${h.id}/audio?format=mp3" download title="MP3">MP3</a>
         <button class="btn small danger" data-del-hist="${h.id}">✕</button></div></div>`).join("")
-      || `<div class="empty">Rien pour l'instant. Vos générations apparaîtront ici.</div>`;
-  } catch (err) { toast(err.message, "error"); }
+    || `<div class="empty">${state.history?.length ? "Aucun résultat pour ces filtres." : "Rien pour l'instant. Vos générations apparaîtront ici."}</div>`;
 }
+["#hist-q", "#hist-kind", "#hist-fav"].forEach((id) => $(id).addEventListener("input", renderHistory));
+
 $("#history-list").addEventListener("click", async (e) => {
-  const b = e.target.closest("[data-del-hist]");
-  if (!b) return;
-  await api(`/api/history/${b.dataset.delHist}`, { method: "DELETE" }).catch((err) => toast(err.message, "error"));
-  loadHistory();
+  const del = e.target.closest("[data-del-hist]");
+  const fav = e.target.closest("[data-fav-hist]");
+  const reuse = e.target.closest("[data-reuse-hist]");
+  try {
+    if (del) {
+      await api(`/api/history/${del.dataset.delHist}`, { method: "DELETE" });
+      state.history = state.history.filter((h) => h.id !== del.dataset.delHist);
+    } else if (fav) {
+      const h = state.history.find((x) => x.id === fav.dataset.favHist);
+      Object.assign(h, await api(`/api/history/${h.id}`, { method: "PATCH", json: { favorite: !h.favorite } }));
+    } else if (reuse) {
+      const h = state.history.find((x) => x.id === reuse.dataset.reuseHist);
+      if (getVoice(h.voice_id)) $("#tts-voice").value = h.voice_id;
+      if (getModel(h.model_id)) { $("#tts-model").value = h.model_id; state.ttsParamsFor = null; }
+      if (h.params) store.set(`params.${h.model_id}`, h.params);
+      onTTSModelChange();
+      if (h.language) $("#tts-lang").value = h.language;
+      $("#tts-text").value = h.text;
+      $("#tts-count").textContent = h.text.length;
+      showTab("tts");
+      return toast("Réglages repris : cliquez sur Générer.", "ok");
+    } else return;
+  } catch (err) { toast(err.message, "error"); }
+  renderHistory();
 });
 
 // ---------------------------------------------------------------- démarrage

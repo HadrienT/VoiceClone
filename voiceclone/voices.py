@@ -25,6 +25,18 @@ from . import audio, config
 
 STORE_SR = 24000
 
+CONSENT_STATEMENTS = {
+    "self": "Cette voix est la mienne.",
+    "other": "J'ai l'autorisation explicite de la personne dont c'est la voix.",
+}
+
+
+def consent_record(owner: str = "self", via: str = "web") -> dict:
+    """Trace horodatée de la déclaration de consentement faite à la création de la voix."""
+    owner = owner if owner in CONSENT_STATEMENTS else "self"
+    return {"confirmed": True, "at": time.time(), "owner": owner,
+            "statement": CONSENT_STATEMENTS[owner], "via": via}
+
 
 @dataclass
 class Sample:
@@ -47,6 +59,8 @@ class Voice:
     samples: list[Sample] = field(default_factory=list)
     analysis: dict = field(default_factory=dict)
     prepared: dict = field(default_factory=dict)  # model_id -> timestamp
+    settings: dict = field(default_factory=dict)  # réglages préférés : {"tts": {model_id, language, params}}
+    consent: dict = field(default_factory=dict)  # trace du consentement : {confirmed, at, statement, source}
 
     @property
     def dir(self) -> Path:
@@ -122,10 +136,12 @@ class VoiceStore:
         tmp.replace(voice.dir / "meta.json")
 
     # ---------------------------------------------------------------- écriture
-    def create(self, name: str, language: str = "fr", description: str = "") -> Voice:
+    def create(self, name: str, language: str = "fr", description: str = "",
+               consent: dict | None = None) -> Voice:
         name = name.strip() or "Nouvelle voix"
         with self._lock:
-            voice = Voice(id=_slug(name), name=name, language=language, description=description)
+            voice = Voice(id=_slug(name), name=name, language=language, description=description,
+                          consent=consent or {})
             (voice.dir / "samples").mkdir(parents=True, exist_ok=True)
             self.save(voice)
             return voice
@@ -162,9 +178,21 @@ class VoiceStore:
             for k in ("name", "language", "description", "transcript"):
                 if fields.get(k) is not None:
                     setattr(voice, k, str(fields[k]).strip())
+            if isinstance(fields.get("settings"), dict):
+                voice.settings = {**voice.settings, **fields["settings"]}
             if fields.get("transcript") is not None:
                 # la transcription influence certains conditionnements
                 self.invalidate_cache(voice)
+            self.save(voice)
+            return voice
+
+    def reorder(self, voice_id: str, files: list[str]) -> Voice:
+        """Change l'ordre des échantillons (le premier sert de référence principale, ex. Chatterbox)."""
+        with self._lock:
+            voice = self.get(voice_id)
+            rank = {f: i for i, f in enumerate(files)}
+            voice.samples.sort(key=lambda s: rank.get(s.file, len(rank)))  # tri stable : inconnus à la fin
+            self._rebuild_reference(voice)
             self.save(voice)
             return voice
 
