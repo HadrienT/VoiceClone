@@ -47,10 +47,11 @@ class F5TTSEngine(Engine):
         x, sr = voice.reference_audio()
         if len(x) <= self.MAX_REF_SECONDS * sr:
             return str(voice.reference_path), voice.transcript
-        # Référence trop longue : on prend le premier échantillon complet qui tient en 12 s
-        for s in voice.samples:
-            if s.duration <= self.MAX_REF_SECONDS:
-                return str(voice.dir / s.file), s.transcript
+        # Référence trop longue : un échantillon complet de 12 s max, de préférence déjà transcrit
+        short_samples = [s for s in voice.samples if s.duration <= self.MAX_REF_SECONDS]
+        if short_samples:
+            best = min(short_samples, key=lambda s: not s.transcript)  # le 1er transcrit, sinon le 1er
+            return str(voice.dir / best.file), best.transcript
         short = voice.cache_dir / "f5_ref.wav"
         if not short.exists():
             audio.save_wav(short, x[: self.MAX_REF_SECONDS * sr], sr)

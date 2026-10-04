@@ -250,3 +250,5 @@ input[type=range] { padding: 0; accent-color: var(--accent); background: none; b
   border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+.sample-block { display: flex; flex-direction: column; gap: 4px; }
+.sample-block textarea { font-size: 13px; padding: 6px 9px; }

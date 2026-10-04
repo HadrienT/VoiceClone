@@ -119,3 +119,26 @@ def test_download_flow(client, monkeypatch):
 def test_frontend_served(client):
     r = client.get("/")
     assert r.status_code == 200 and "VoiceClone" in r.text
+
+
+def test_sample_transcripts_and_error_details(client, fake_model, monkeypatch):
+    v = create_voice(client).json()
+    r = client.put(f"/api/voices/{v['id']}/transcripts", json={"texts": {"001.wav": "Bonjour à tous"}})
+    assert r.status_code == 200
+    v = r.json()
+    assert v["samples"][0]["transcript"] == "Bonjour à tous" and v["transcript"] == "Bonjour à tous"
+
+    # une erreur inattendue doit remonter son vrai message à l'interface
+    from tests.fake_engine import FakeEngine
+
+    def boom(self, *a, **k):
+        raise RuntimeError("panne de test")
+
+    monkeypatch.setattr(FakeEngine, "tts", boom)
+    from fastapi.testclient import TestClient
+
+    from voiceclone.server import create_app
+
+    with TestClient(create_app(), raise_server_exceptions=False) as c:
+        r = c.post("/api/tts", json={"model_id": "fake", "voice_id": v["id"], "text": "x"})
+    assert r.status_code == 500 and "panne de test" in r.json()["detail"]

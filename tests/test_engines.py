@@ -62,3 +62,16 @@ def test_torchaudio_shim_delegates_and_reads_with_soundfile(tmp_path, monkeypatc
     path.write_bytes(make_voice_wav(1.0, sr=16000))
     x, sr = module.torchaudio.load(path)
     assert sr == 16000 and x.shape[0] == 1 and x.dtype == np.float32
+
+
+def test_f5_prefers_short_transcribed_sample(tmp_data):
+    store = VoiceStore()
+    v = store.create("Longue")
+    for secs in (14.0, 9.0, 8.0):  # total > 12 s : F5 doit choisir un échantillon court
+        v = store.add_sample(v.id, make_voice_wav(secs))
+    engine = F5TTSEngine(get_model("f5-tts"), tmp_data / "models" / "f5-tts", "cpu")
+    ref, text = engine._reference(v)
+    assert ref.endswith("002.wav") and text == ""
+    v = store.set_transcripts(v.id, {"samples/003.wav": "troisième"})
+    ref, text = engine._reference(v)
+    assert ref.endswith("003.wav") and text == "troisième"
