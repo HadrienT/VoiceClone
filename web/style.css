@@ -252,3 +252,12 @@ input[type=range] { padding: 0; accent-color: var(--accent); background: none; b
 @keyframes spin { to { transform: rotate(360deg); } }
 .sample-block { display: flex; flex-direction: column; gap: 4px; }
 .sample-block textarea { font-size: 13px; padding: 6px 9px; }
+.smart { margin-top: 14px; background: var(--panel-2); border-radius: var(--radius); padding: 12px 14px; }
+.smart .check span { color: var(--text); }
+.report-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+.report-table th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.report-table td { padding: 5px 6px; border-bottom: 1px dashed var(--border); }
+.report-table tr.kept td:first-child { color: var(--accent-2); font-weight: 700; }
+.report-table tr.rejected { color: var(--muted); }
+.scorebar { display: inline-block; width: 60px; height: 6px; background: var(--panel-2); border-radius: 99px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
+.scorebar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--danger), var(--warn), var(--accent-2)); background-size: 60px 100%; }

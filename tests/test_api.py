@@ -147,3 +147,31 @@ def test_sample_transcripts_and_error_details(client, fake_model, monkeypatch):
 def test_ui_files_are_revalidated(client):
     assert client.get("/app.js").headers["cache-control"] == "no-cache"
     assert "cache-control" not in client.get("/api/models").headers
+
+
+def test_auto_import_keeps_best_parts(client, fake_model):
+    import io as _io
+
+    import numpy as np
+    import soundfile as sf
+
+    sr, rng = 24000, np.random.default_rng(0)
+    t = np.arange(int(4 * sr)) / sr
+    clean = 0.25 * (0.55 + 0.45 * np.sin(2 * np.pi * 3.5 * t)) ** 2 * np.sin(2 * np.pi * 150 * t)
+    noisy = clean + 0.08 * rng.standard_normal(len(t))
+    gap = np.zeros(sr // 2)
+    x = np.concatenate([clean, gap, noisy, gap, clean, gap]) + 0.005 * rng.standard_normal(len(t) * 3 + 3 * len(gap))
+    buf = _io.BytesIO()
+    sf.write(buf, x.astype(np.float32), sr, format="WAV")
+
+    v = client.post("/api/voices", data={"name": "Auto", "consent": "true"}).json()
+    r = client.post(f"/api/voices/{v['id']}/auto-import", files={"file": ("brut.wav", buf.getvalue(), "audio/wav")},
+                    data={"transcribe_model_id": "fake"})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    kept = [s for s in out["report"]["segments"] if s["kept"]]
+    rejected = [s for s in out["report"]["segments"] if not s["kept"]]
+    assert len(kept) == 2 and len(out["voice"]["samples"]) == 2
+    assert [s["reason"] for s in rejected] == ["trop de bruit"]
+    assert all(s["transcript"] == "bonjour tout le monde" for s in out["voice"]["samples"])
+    assert out["voice"]["samples"][0]["original_name"].endswith("meilleur n°1")

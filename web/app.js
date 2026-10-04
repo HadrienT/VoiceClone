@@ -412,23 +412,90 @@ bindRecorder({
   },
 });
 
-$("#create-voice").addEventListener("click", (e) => busy(e.currentTarget, "Analyse…", async () => {
+// ------------------------------------------------------- import intelligent
+const smartPrefs = store.get("smart", {});
+for (const [id, key] of [["#smart-on", "on"], ["#smart-denoise", "denoise"], ["#smart-transcribe", "transcribe"]]) {
+  if (smartPrefs[key] !== undefined) $(id).checked = smartPrefs[key];
+}
+if (smartPrefs.target) $("#smart-target").value = smartPrefs.target;
+function saveSmartPrefs() {
+  store.set("smart", { on: $("#smart-on").checked, denoise: $("#smart-denoise").checked,
+    transcribe: $("#smart-transcribe").checked, target: $("#smart-target").value });
+  $(".smart-opts").classList.toggle("hidden", !$("#smart-on").checked);
+}
+["#smart-on", "#smart-denoise", "#smart-transcribe", "#smart-target"].forEach((id) => $(id).addEventListener("change", saveSmartPrefs));
+saveSmartPrefs();
+
+/** Envoie un enregistrement à l'import intelligent ; renvoie { voice, report }. */
+async function smartImport(voiceId, blob, name, source, targetSeconds) {
+  const fd = new FormData();
+  fd.append("file", blob, name);
+  fd.append("source", source);
+  fd.append("enhance", $("#smart-denoise").checked);
+  fd.append("target_seconds", targetSeconds ?? $("#smart-target").value);
+  const asr = modelsWith("asr").find(isReady);
+  if ($("#smart-transcribe").checked && asr) fd.append("transcribe_model_id", asr.id);
+  return api(`/api/voices/${voiceId}/auto-import`, { method: "POST", body: fd });
+}
+
+function renderReport(voiceName, items) {
+  const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+  $("#prep-report").innerHTML = `<div class="top" style="display:flex;justify-content:space-between;align-items:center">
+      <h2 style="margin:0">✨ Import intelligent — ${esc(voiceName)}</h2>
+      <button class="btn small" data-close-report>Fermer</button></div>
+    ${items.map(({ name, report: r }) => `
+      <h3 style="margin-top:14px">${esc(name)} : ${r.duration} s analysées → <span style="color:var(--accent-2)">${r.kept_duration} s gardées</span></h3>
+      <p class="muted" style="margin:0;font-size:13px">Bruit de fond ${r.noise_floor_db_before} dB${r.denoised ? ` → ${r.noise_floor_db_after} dB après débruitage` : " (propre, pas de débruitage)"}.
+        Les passages gardés sont ajoutés à la voix, le meilleur en premier.</p>
+      <table class="report-table"><tr><th></th><th>Passage</th><th>Score</th><th>Voix / bruit</th><th>Parole</th><th>Verdict</th></tr>
+      ${r.segments.map((g) => `<tr class="${g.kept ? "kept" : "rejected"}">
+        <td>${g.kept ? `✓ n°${r.kept_order.indexOf(g.index) + 1}` : "✗"}</td>
+        <td>${fmt(g.start)} → ${fmt(g.end)} <span class="muted">(${g.duration} s)</span></td>
+        <td><span class="scorebar"><i style="width:${g.score}%"></i></span>${Math.round(g.score)}</td>
+        <td>${g.snr_db} dB</td><td>${Math.round(g.speech_ratio * 100)} %</td>
+        <td>${g.kept ? "gardé" : esc(g.reason)}</td></tr>`).join("")}
+      </table>`).join("")}`;
+  $("#prep-report").classList.remove("hidden");
+  $("#prep-report").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+$("#prep-report").addEventListener("click", (e) => {
+  if (e.target.closest("[data-close-report]")) $("#prep-report").classList.add("hidden");
+});
+
+$("#create-voice").addEventListener("click", (e) => busy(e.currentTarget, $("#smart-on").checked ? "Analyse et nettoyage…" : "Analyse…", async () => {
   try {
     const fd = new FormData();
     fd.append("name", $("#nv-name").value.trim());
     fd.append("language", $("#nv-lang").value);
     fd.append("consent", $("#nv-consent").checked);
-    const [first, ...rest] = pending;
-    fd.append("files", first.blob, first.source === "upload" ? first.name : `${first.name}.wav`);
-    fd.append("source", first.source);
-    if (first.useTranscript) fd.append("transcript", first.transcript);
-    let voice = await api("/api/voices", { method: "POST", body: fd });
-    for (const p of rest) {
-      const f = new FormData();
-      f.append("file", p.blob, p.source === "upload" ? p.name : `${p.name}.wav`);
-      f.append("source", p.source);
-      if (p.useTranscript) f.append("transcript", p.transcript);
-      voice = await api(`/api/voices/${voice.id}/samples`, { method: "POST", body: f });
+    const fileName = (p) => (p.source === "upload" ? p.name : `${p.name}.wav`);
+    let voice;
+    if ($("#smart-on").checked) {
+      // voix vide, puis chaque enregistrement passe par l'import intelligent (durée cible partagée)
+      voice = await api("/api/voices", { method: "POST", body: fd });
+      const reports = [];
+      let remaining = parseFloat($("#smart-target").value);
+      for (const p of pending) {
+        if (remaining < 3) break;
+        const r = await smartImport(voice.id, p.blob, fileName(p), p.source, remaining);
+        voice = r.voice;
+        remaining -= r.report.kept_duration;
+        reports.push({ name: p.name, report: r.report });
+      }
+      renderReport(voice.name, reports);
+    } else {
+      const [first, ...rest] = pending;
+      fd.append("files", first.blob, fileName(first));
+      fd.append("source", first.source);
+      if (first.useTranscript) fd.append("transcript", first.transcript);
+      voice = await api("/api/voices", { method: "POST", body: fd });
+      for (const p of rest) {
+        const f = new FormData();
+        f.append("file", p.blob, fileName(p));
+        f.append("source", p.source);
+        if (p.useTranscript) f.append("transcript", p.transcript);
+        voice = await api(`/api/voices/${voice.id}/samples`, { method: "POST", body: f });
+      }
     }
     pending.splice(0).forEach((p) => URL.revokeObjectURL(p.url));
     renderPending();
@@ -472,6 +539,8 @@ function renderVoices() {
             </div>`;
           }).join("")}
           <div class="row" style="margin:6px 0 0">
+            <button class="btn small" data-smart-import title="Nettoie, découpe et ajoute seulement les meilleurs passages">✨ Import intelligent</button>
+            <input type="file" accept="audio/*,video/*" hidden data-smart-input>
             <button class="btn small" data-add-file>＋ Fichier</button>
             <button class="btn small rec" data-add-rec>● Enregistrer</button>
             <input type="file" accept="audio/*,video/*" hidden data-file-input>
@@ -515,6 +584,26 @@ $("#voice-list").addEventListener("click", async (e) => {
       toast("Voix supprimée", "ok");
     } else if (btn.dataset.rmSample) {
       await api(`/api/voices/${id}/samples/${encodeURIComponent(btn.dataset.rmSample)}`, { method: "DELETE" });
+    } else if (btn.hasAttribute("data-smart-import")) {
+      const input = $("[data-smart-input]", card);
+      input.onchange = () => busy(btn, "Analyse…", async () => {
+        try {
+          const reports = [];
+          let voice;
+          for (const f of input.files) {
+            let blob = f;
+            try { blob = (await toWav(f)).blob; } catch { /* le serveur décodera */ }
+            const r = await smartImport(id, blob, f.name.replace(/\.[^.]+$/, "") + ".wav", "upload");
+            voice = r.voice;
+            reports.push({ name: f.name, report: r.report });
+          }
+          input.value = "";
+          if (voice) renderReport(voice.name, reports);
+        } catch (err) { toast(err.message, "error"); }
+        loadVoices();
+      });
+      input.click();
+      return;
     } else if (btn.hasAttribute("data-add-file")) {
       const input = $("[data-file-input]", card);
       input.onchange = async () => {

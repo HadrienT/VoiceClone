@@ -97,6 +97,23 @@
 
         <div id="pending-list" class="pending"></div>
 
+        <div class="smart">
+          <label class="check" style="margin:0">
+            <input type="checkbox" id="smart-on" checked>
+            <span><b>✨ Import intelligent</b> — nettoie le son, découpe aux silences et ne garde que les
+              meilleurs passages (voix claire, sans bruit ni saturation), le meilleur en premier.</span>
+          </label>
+          <div class="row smart-opts" style="margin:8px 0 0">
+            <label class="field">Voix à garder
+              <select id="smart-target">
+                <option value="15">15 s</option><option value="20">20 s</option>
+                <option value="30" selected>30 s (recommandé)</option><option value="60">60 s</option>
+              </select></label>
+            <label class="check" style="margin:0"><input type="checkbox" id="smart-denoise" checked> Réduire le bruit de fond</label>
+            <label class="check" style="margin:0"><input type="checkbox" id="smart-transcribe" checked> Transcrire avec Whisper (pour F5-TTS)</label>
+          </div>
+        </div>
+
         <label class="check">
           <input type="checkbox" id="nv-consent">
           Je confirme que cette voix est la mienne ou que j'ai l'autorisation explicite de la personne.
@@ -106,6 +123,7 @@
         </div>
       </div>
 
+      <div id="prep-report" class="card hidden"></div>
       <div id="voice-list" class="grid"></div>
     </section>
 
