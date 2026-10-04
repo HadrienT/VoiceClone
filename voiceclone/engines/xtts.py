@@ -15,6 +15,11 @@ LANG_ALIASES = {"zh": "zh-cn"}
 class XTTSEngine(Engine):
     def load(self) -> None:
         import torch
+        import transformers.pytorch_utils as hf_utils
+
+        # coqui-tts importe encore ce helper, supprimé dans transformers 5 (version imposée par Chatterbox)
+        if not hasattr(hf_utils, "isin_mps_friendly"):
+            hf_utils.isin_mps_friendly = torch.isin
         from TTS.tts.configs.xtts_config import XttsConfig
         from TTS.tts.models import xtts as xtts_module
         from TTS.tts.models.xtts import Xtts

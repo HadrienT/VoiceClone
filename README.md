@@ -58,10 +58,10 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 Chaque modèle a ses propres dépendances ; l'interface affiche la commande à lancer si elles manquent.
 
 ```bash
-pip install coqui-tts 'transformers<5'   # XTTS v2  (recommandé pour le français)
+pip install coqui-tts                 # XTTS v2  (recommandé pour le français)
 pip install faster-whisper            # Whisper  (mode « transcription + TTS », transcription auto)
 pip install git+https://github.com/myshell-ai/OpenVoice.git   # OpenVoice V2 (live rapide)
-pip install chatterbox-tts            # Chatterbox (TTS multilingue + VC)
+pip install chatterbox-tts 'setuptools<81'   # Chatterbox (TTS multilingue + VC)
 pip install f5-tts                    # F5-TTS
 ```
 
