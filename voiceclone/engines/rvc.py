@@ -19,7 +19,7 @@ import numpy as np
 
 from .. import audio
 from ..voices import Voice
-from .base import Engine, EngineError
+from .base import Engine, EngineError, ensure_pkg_resources
 
 
 def voice_model(voice: Voice) -> tuple[Path, Path | None, str]:
@@ -34,6 +34,7 @@ def voice_model(voice: Voice) -> tuple[Path, Path | None, str]:
 
 class RVCEngine(Engine):
     def load(self) -> None:
+        ensure_pkg_resources()  # pyworld (dépendance de RVC) importe encore pkg_resources
         import rvc_python
         from rvc_python.infer import RVCInference
 

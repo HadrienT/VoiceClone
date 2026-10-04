@@ -57,6 +57,46 @@ class Engine:
         raise EngineError(f"{self.spec.name} ne fait pas de traduction.")
 
 
+def ensure_pkg_resources() -> None:
+    """Fournit un `pkg_resources` minimal s'il manque (setuptools ≥ 81, venv créé par uv).
+
+    Plusieurs dépendances l'importent encore pour deux usages : localiser un fichier de données
+    (`resource_filename`, Perth de Chatterbox) ou lire leur version (`get_distribution`, pyworld de RVC).
+    """
+    import importlib.util
+    import os
+    import sys
+    import types
+
+    try:
+        import pkg_resources  # noqa: F401
+        return
+    except ImportError:
+        pass
+    from importlib import metadata
+
+    def resource_filename(package: str, resource: str) -> str:
+        # appelée pendant l'import du paquet lui-même : on localise son dossier sans l'exécuter
+        mod = sys.modules.get(package)
+        origin = getattr(mod, "__file__", None) or importlib.util.find_spec(package).origin
+        return os.path.join(os.path.dirname(origin), resource)
+
+    class DistributionNotFound(Exception):
+        pass
+
+    def get_distribution(name: str):
+        try:
+            return types.SimpleNamespace(project_name=name, version=metadata.version(name))
+        except metadata.PackageNotFoundError as exc:
+            raise DistributionNotFound(name) from exc
+
+    shim = types.ModuleType("pkg_resources")
+    shim.resource_filename = resource_filename
+    shim.get_distribution = get_distribution
+    shim.DistributionNotFound = DistributionNotFound
+    sys.modules["pkg_resources"] = shim
+
+
 def mix_sources(voice: Voice) -> list[tuple[Voice, float]]:
     """Sources d'une voix mélangée (voir VoiceStore.create_mix) ; liste vide pour une voix normale."""
     if not getattr(voice, "mix", None):

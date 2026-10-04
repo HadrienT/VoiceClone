@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 from voiceclone import config, settings  # noqa: E402
 from voiceclone.registry import all_models, get_model  # noqa: E402
 
-BASE_FOR_WORKER = ["numpy", "scipy", "soundfile"]
+BASE_FOR_WORKER = ["numpy", "scipy", "soundfile", "setuptools<81"]  # pkg_resources (pyworld, perth)
 # Ces moteurs épinglent de vieilles versions (numpy 1.23, descript-audio-codec…) qui cassent les
 # autres : installés isolés par défaut (--no-isolate pour forcer l'environnement courant).
 ALWAYS_ISOLATED = {"rvc", "seed-vc"}

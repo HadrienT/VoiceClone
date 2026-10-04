@@ -6,7 +6,7 @@ import numpy as np
 
 from .. import audio
 from ..voices import Voice
-from .base import Engine, EngineError, mix_sources, split_text, to_numpy, weighted
+from .base import Engine, EngineError, ensure_pkg_resources, mix_sources, split_text, to_numpy, weighted
 
 
 def ensure_perth() -> None:
@@ -15,28 +15,11 @@ def ensure_perth() -> None:
     `resemble-perth` importe `pkg_resources` (fourni par setuptools < 81). Dans un venv créé par uv,
     ou avec un setuptools récent, ce module n'existe pas : l'import échoue en silence et
     `perth.PerthImplicitWatermarker` vaut None ("'NoneType' object is not callable").
-    On fournit alors l'unique fonction utilisée, `resource_filename`, avant de (re)charger perth.
+    On fournit alors un `pkg_resources` minimal avant de (re)charger perth.
     """
     import importlib
-    import sys
-    import types
 
-    try:
-        import pkg_resources  # noqa: F401
-    except ImportError:
-        import importlib.util
-        import os
-
-        def resource_filename(package: str, resource: str) -> str:
-            # Appelée pendant l'import du paquet lui-même : on localise son dossier sans l'exécuter
-            mod = sys.modules.get(package)
-            origin = getattr(mod, "__file__", None) or importlib.util.find_spec(package).origin
-            return os.path.join(os.path.dirname(origin), resource)
-
-        shim = types.ModuleType("pkg_resources")
-        shim.resource_filename = resource_filename
-        sys.modules["pkg_resources"] = shim
-
+    ensure_pkg_resources()
     import perth
 
     if perth.PerthImplicitWatermarker is None:
