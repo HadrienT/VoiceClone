@@ -148,14 +148,21 @@ def normalize_loudness(x: np.ndarray, target_db: float = -20.0, peak: float = 0.
     return (y * (peak / m) if m > peak else y).astype(np.float32)
 
 
-def clean(x: np.ndarray, sr: int, enhance: bool = True) -> tuple[np.ndarray, dict]:
-    """Nettoie un enregistrement complet. Renvoie le signal et ce qui a été fait."""
+def clean(x: np.ndarray, sr: int, enhance: bool = True, method: str = "auto") -> tuple[np.ndarray, dict]:
+    """Nettoie un enregistrement complet. Renvoie le signal et ce qui a été fait.
+
+    method : "auto", "spectral", "deepfilter", "demucs" ou "demucs+deepfilter" (voir voiceclone.enhance).
+    """
+    from . import enhance as enh
+
     info = {"noise_floor_db_before": round(noise_floor_db(x, sr), 1), "denoised": False}
     y = audio.highpass(x, sr, 70.0)
     snr = speech_level_db(y, sr) - noise_floor_db(y, sr)
-    if enhance and snr < 45:  # inutile (et risqué pour le timbre) sur un enregistrement déjà propre
-        y = denoise(y, sr, strength=1.0 if snr < 30 else 0.6)
-        info["denoised"] = True
+    explicit = method not in ("auto", "spectral")
+    # inutile (et risqué pour le timbre) sur un enregistrement déjà propre, sauf méthode choisie exprès
+    if enhance and (snr < 45 or explicit):
+        y, details = enh.run(y, sr, method, denoise, strength=1.0 if snr < 30 else 0.6)
+        info.update(details, denoised=True)
     info["noise_floor_db_after"] = round(noise_floor_db(y, sr), 1)
     return y, info
 
@@ -205,10 +212,10 @@ def score_segment(seg: np.ndarray, original: np.ndarray, sr: int, floor_db: floa
 
 
 def auto_prepare(x: np.ndarray, sr: int, enhance: bool = True, target_s: float = 30.0,
-                 min_s: float = 3.0, max_s: float = 11.0) -> tuple[list[np.ndarray], dict]:
+                 min_s: float = 3.0, max_s: float = 11.0, method: str = "auto") -> tuple[list[np.ndarray], dict]:
     """Nettoie, découpe, note et sélectionne. Renvoie les morceaux gardés (meilleur d'abord) et un rapport."""
     x = audio.to_mono(x)
-    cleaned, info = clean(x, sr, enhance)
+    cleaned, info = clean(x, sr, enhance, method)
     floor = noise_floor_db(cleaned, sr)
     segments: list[Segment] = []
     pieces: dict[int, np.ndarray] = {}

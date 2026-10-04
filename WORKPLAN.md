@@ -45,9 +45,9 @@ Légende : effort **S** (quelques heures) · **M** (une journée) · **L** (plus
 ## Lot 5 — Audio et textes longs (M)
 | # | Tâche | Effort | État |
 |---|---|---|---|
-| 5.1 | Forme d'onde avec sélection avant import | M | ☐ |
+| 5.1 | Forme d'onde avec sélection avant import | M | ☑ |
 | 5.2 | Textes longs : phrase par phrase, régénérer une phrase, pauses `[pause 1s]`, export MP3 | M | ☑ |
-| 5.3 | Nettoyage avancé à l'import : DeepFilterNet et Demucs (optionnels, repli automatique) | M | ☐ |
+| 5.3 | Nettoyage avancé à l'import : DeepFilterNet et Demucs (optionnels, repli automatique) | M | ⚠ |
 
 ## Lot 6 — Nouvelles fonctions (M)
 | # | Tâche | Effort | État |

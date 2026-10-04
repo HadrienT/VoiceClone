@@ -5,6 +5,7 @@ import { $, $$, esc, LANGS, langName, store, api, toast, fmtBytes, busy } from "
 import { watchJob, jobProgressHtml, refreshJobsPanel } from "./jobs.js";
 import { renderSegments } from "./longtext.js";
 import { showTools } from "./tools.js";
+import { openTrimmer } from "./trim.js";
 
 const READ_PROMPTS = [
   "Bonjour, je m'appelle comme vous voulez. Aujourd'hui, il fait beau et je vais enregistrer ma voix pour essayer ce logiciel. J'espère que le résultat sera bluffant !",
@@ -223,6 +224,7 @@ function renderPending() {
       <span class="name" title="${esc(p.name)}">${esc(p.name)} · ${p.duration ? p.duration.toFixed(1) + " s" : ""}</span>
       <audio controls src="${p.url}"></audio>
       ${p.transcript ? `<label class="check" style="margin:0;font-size:12px" title="${esc(p.transcript)}"><input type="checkbox" data-read="${i}" ${p.useTranscript ? "checked" : ""}> j'ai lu le texte proposé</label>` : ""}
+      <button class="btn small" data-trim="${i}" title="Couper : garder ou retirer un passage">✂</button>
       <button class="btn small danger" data-rm="${i}">✕</button></div>`).join("");
   const total = pending.reduce((s, p) => s + (p.duration || 0), 0);
   if (pending.length) {
@@ -239,7 +241,20 @@ $("#pending-list").addEventListener("change", (e) => {
   const c = e.target.closest("[data-read]");
   if (c) pending[+c.dataset.read].useTranscript = c.checked;
 });
-$("#pending-list").addEventListener("click", (e) => {
+$("#pending-list").addEventListener("click", async (e) => {
+  const t = e.target.closest("[data-trim]");
+  if (t) {
+    const p = pending[+t.dataset.trim];
+    try {
+      const out = await openTrimmer(p.blob, p.name);
+      if (!out) return;
+      URL.revokeObjectURL(p.url);
+      Object.assign(p, { blob: out.blob, duration: out.duration, url: URL.createObjectURL(out.blob) });
+      if (!p.name.includes("✂")) p.name = `${p.name} ✂`;
+      renderPending();
+    } catch (err) { toast(`Impossible d'afficher la forme d'onde : ${err.message}`, "error"); }
+    return;
+  }
   const b = e.target.closest("[data-rm]");
   if (!b) return;
   const [p] = pending.splice(+b.dataset.rm, 1);
@@ -362,24 +377,34 @@ bindRecorder({
 
 // ------------------------------------------------------- import intelligent
 const smartPrefs = store.get("smart", {});
-for (const [id, key] of [["#smart-on", "on"], ["#smart-denoise", "denoise"], ["#smart-transcribe", "transcribe"]]) {
+for (const [id, key] of [["#smart-on", "on"], ["#smart-transcribe", "transcribe"]]) {
   if (smartPrefs[key] !== undefined) $(id).checked = smartPrefs[key];
 }
 if (smartPrefs.target) $("#smart-target").value = smartPrefs.target;
 function saveSmartPrefs() {
-  store.set("smart", { on: $("#smart-on").checked, denoise: $("#smart-denoise").checked,
+  store.set("smart", { on: $("#smart-on").checked, method: $("#smart-method").value,
     transcribe: $("#smart-transcribe").checked, target: $("#smart-target").value });
   $(".smart-opts").classList.toggle("hidden", !$("#smart-on").checked);
 }
-["#smart-on", "#smart-denoise", "#smart-transcribe", "#smart-target"].forEach((id) => $(id).addEventListener("change", saveSmartPrefs));
+["#smart-on", "#smart-method", "#smart-transcribe", "#smart-target"].forEach((id) => $(id).addEventListener("change", saveSmartPrefs));
 saveSmartPrefs();
+
+/** Méthodes de nettoyage proposées par le serveur (DeepFilterNet / Demucs si installés). */
+api("/api/enhance/methods").then((methods) => {
+  const want = smartPrefs.method ?? (smartPrefs.denoise === false ? "none" : "auto");
+  $("#smart-method").innerHTML = `<option value="none">Aucun</option>` + methods.map((m) =>
+    `<option value="${m.id}" ${m.available ? "" : "disabled"}>${esc(m.label)}${m.available ? "" : ` — ${esc(m.pip)}`}</option>`).join("");
+  const ok = want === "none" || methods.some((m) => m.id === want && m.available);
+  $("#smart-method").value = ok ? want : "auto";
+}).catch(() => {});
 
 /** Envoie un enregistrement à l'import intelligent ; renvoie { voice, report }. */
 async function smartImport(voiceId, blob, name, source, targetSeconds) {
   const fd = new FormData();
   fd.append("file", blob, name);
   fd.append("source", source);
-  fd.append("enhance", $("#smart-denoise").checked);
+  fd.append("enhance", $("#smart-method").value !== "none");
+  fd.append("method", $("#smart-method").value === "none" ? "auto" : $("#smart-method").value);
   fd.append("target_seconds", targetSeconds ?? $("#smart-target").value);
   const asr = modelsWith("asr").find(isReady);
   if ($("#smart-transcribe").checked && asr) fd.append("transcribe_model_id", asr.id);
@@ -393,7 +418,8 @@ function renderReport(voiceName, items) {
       <button class="btn small" data-close-report>Fermer</button></div>
     ${items.map(({ name, report: r }) => `
       <h3 style="margin-top:14px">${esc(name)} : ${r.duration} s analysées → <span style="color:var(--accent-2)">${r.kept_duration} s gardées</span></h3>
-      <p class="muted" style="margin:0;font-size:13px">Bruit de fond ${r.noise_floor_db_before} dB${r.denoised ? ` → ${r.noise_floor_db_after} dB après débruitage` : " (propre, pas de débruitage)"}.
+      <p class="muted" style="margin:0;font-size:13px">Bruit de fond ${r.noise_floor_db_before} dB${r.denoised ? ` → ${r.noise_floor_db_after} dB après nettoyage (${esc(r.method || "spectral")})` : " (propre, pas de débruitage)"}.
+        ${r.fallback ? `<br>⚠ ${esc(r.fallback)}` : ""}
         Les passages gardés sont ajoutés à la voix, le meilleur en premier.</p>
       <table class="report-table"><tr><th></th><th>Passage</th><th>Score</th><th>Voix / bruit</th><th>Parole</th><th>Verdict</th></tr>
       ${r.segments.map((g) => `<tr class="${g.kept ? "kept" : "rejected"}">

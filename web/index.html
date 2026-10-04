@@ -111,7 +111,11 @@
                 <option value="15">15 s</option><option value="20">20 s</option>
                 <option value="30" selected>30 s (recommandé)</option><option value="60">60 s</option>
               </select></label>
-            <label class="check" style="margin:0"><input type="checkbox" id="smart-denoise" checked> Réduire le bruit de fond</label>
+            <label class="field">Nettoyage
+              <select id="smart-method">
+                <option value="none">Aucun</option>
+                <option value="auto" selected>Automatique</option>
+              </select></label>
             <label class="check" style="margin:0"><input type="checkbox" id="smart-transcribe" checked> Transcrire avec Whisper (pour F5-TTS)</label>
           </div>
         </div>

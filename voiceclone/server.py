@@ -324,6 +324,7 @@ def create_app() -> FastAPI:
         target_seconds: float = Form(30.0),
         replace: bool = Form(False),
         transcribe_model_id: str = Form(""),
+        method: str = Form("auto"),
     ):
         """Import intelligent : nettoie l'enregistrement, le découpe, ne garde que les meilleurs passages
         (le meilleur en premier) et, si un modèle Whisper est indiqué, les transcrit."""
@@ -337,7 +338,8 @@ def create_app() -> FastAPI:
         def work():
             voices.get(voice_id)
             x, sr = audio.load_audio(data)
-            pieces, report = auto_prepare(x, sr, enhance=enhance, target_s=max(5.0, min(target_seconds, 120.0)))
+            pieces, report = auto_prepare(x, sr, enhance=enhance, method=method,
+                                          target_s=max(5.0, min(target_seconds, 120.0)))
             if replace:
                 for smp in list(voices.get(voice_id).samples):
                     voices.remove_sample(voice_id, smp.file)
@@ -354,6 +356,12 @@ def create_app() -> FastAPI:
 
         voice, report = await run_in_threadpool(work)
         return {"voice": voice.to_dict(), "report": report}
+
+    @app.get("/api/enhance/methods")
+    def enhance_methods():
+        from . import enhance
+
+        return enhance.describe()
 
     @app.put("/api/voices/{voice_id}/order")
     def reorder_samples(voice_id: str, body: SampleOrder):
