@@ -105,9 +105,19 @@ def list_custom_models() -> list[dict]:
 
 # ------------------------------------------------------------ sous-processus
 def run_process(job: Job, cmd: list[str], cwd: Path | None = None, env: dict | None = None,
-                progress=None, log_path: Path | None = None) -> None:
-    """Lance cmd, recopie sa sortie dans le journal, met à jour la progression, s'arrête si annulé."""
+                progress=None, log_path: Path | None = None, companions: list[dict] | None = None) -> None:
+    """Lance cmd, recopie sa sortie dans le journal, met à jour la progression, s'arrête si annulé.
+
+    companions : environnements de processus identiques lancés en parallèle (rangs > 0 d'un
+    entraînement multi-GPU) ; leur sortie va dans <log_path>.rang<N>.
+    """
     log.info("Entraînement : %s", " ".join(str(c) for c in cmd))
+    others = []
+    for k, cenv in enumerate(companions or [], 1):
+        clog = open(f"{log_path or os.devnull}.rang{k}" if log_path else os.devnull, "a", encoding="utf-8")
+        others.append((subprocess.Popen([str(c) for c in cmd], cwd=str(cwd) if cwd else None,
+                                        env=config.child_env(**{**(env or {}), **cenv}), stdout=clog,
+                                        stderr=subprocess.STDOUT, text=True), clog))
     proc = subprocess.Popen([str(c) for c in cmd], cwd=str(cwd) if cwd else None, env=config.child_env(**(env or {})),
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     tail: list[str] = []
@@ -126,18 +136,83 @@ def run_process(job: Job, cmd: list[str], cwd: Path | None = None, env: dict | N
                 proc.terminate()
                 break
         proc.wait()
+        failed = proc.returncode != 0
+        for p, _ in others:
+            if failed or job.cancelled:
+                p.terminate()
+            try:
+                p.wait(timeout=None if not (failed or job.cancelled) else 30)
+            except subprocess.TimeoutExpired:
+                p.kill()
     finally:
         if out:
             out.close()
+        for p, clog in others:
+            if p.poll() is None:
+                p.kill()
+            clog.close()
         if proc.poll() is None:
             proc.kill()
     if job.cancelled:
         raise JobCancelled()
-    if proc.returncode != 0:
-        raise RuntimeError("L'entraînement a échoué :\n" + "\n".join(tail[-6:]))
+    bad = [k for k, (p, _) in enumerate(others, 1) if p.returncode not in (0, None)]
+    if proc.returncode != 0 or bad:
+        extra = f"\n(processus GPU {bad} en échec, voir {log_path}.rang*)" if bad else ""
+        raise RuntimeError("L'entraînement a échoué :\n" + "\n".join(tail[-6:]) + extra)
 
 
 # ------------------------------------------------------------ XTTS
+def check_training_python(python: str) -> None:
+    """Vérifie que le Python d'entraînement importe coqui-tts avant de lancer des heures de calcul."""
+    code = ("import numpy, matplotlib, trainer\n"
+            "from voiceclone.engines.xtts import patch_coqui\npatch_coqui()\n"
+            "import TTS.tts.layers.xtts.trainer.gpt_trainer\nprint(numpy.__version__)")
+    r = subprocess.run([python, "-c", code], capture_output=True, text=True, cwd=config.ROOT_DIR,
+                       env=config.child_env(PYTHONPATH=str(config.ROOT_DIR)))
+    if r.returncode == 0:
+        return
+    err = (r.stderr.strip().splitlines() or ["?"])[-1]
+    if "numpy" in err.lower():
+        raise RuntimeError(
+            f"Version de numpy incompatible dans l'environnement Python ({err}).\n"
+            "Cause probable : rvc-python (ou un autre moteur) installé dans le même environnement a "
+            "rétrogradé numpy. Réparez avec :\n"
+            f"  {python} -m pip install 'numpy==1.26.4'   (ou : uv pip install 'numpy==1.26.4')\n"
+            "puis réinstallez RVC dans un environnement isolé : python scripts/install.py --isolated rvc")
+    raise RuntimeError(f"L'environnement d'entraînement XTTS est incomplet : {err}\n"
+                       "Installez : pip install coqui-tts (voir Diagnostic → Versions).")
+
+
+def training_gpus(mode: str = "all", dev: str | None = None) -> list[str]:
+    """GPU physiques à utiliser : tous ceux que voit le serveur (« all ») ou seulement le sien (« one »)."""
+    dev = dev or manager_device()
+    if not dev.startswith("cuda"):
+        return []
+    visible = [v.strip() for v in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",") if v.strip()]
+    if mode == "all":
+        n = cuda_count()
+        if n > 1:
+            return visible[:n] if len(visible) >= n else [str(i) for i in range(n)]
+    return [single_gpu_env(dev)["CUDA_VISIBLE_DEVICES"]]
+
+
+def cuda_count() -> int:
+    try:
+        import torch
+
+        return torch.cuda.device_count() if torch.cuda.is_available() else 0
+    except Exception:
+        return 0
+
+
+def free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def build_xtts_dataset(voice: Voice, out: Path, transcribe=None, language: str | None = None) -> dict:
     """Écrit wavs/*.wav (22,05 kHz) + metadata_train.csv / metadata_eval.csv (format « coqui »)."""
     from .prep import split
@@ -190,14 +265,17 @@ def build_xtts_dataset(voice: Voice, out: Path, transcribe=None, language: str |
 
 def finetune_xtts(job: Job, manager, voices: VoiceStore, voice_id: str, epochs: int = 10, batch_size: int = 2,
                   grad_accum: int = 4, asr_model_id: str | None = None, language: str | None = None,
-                  name: str | None = None) -> dict:
+                  name: str | None = None, gpus: str = "all", precision: str = "auto") -> dict:
     voice = voices.get(voice_id)
     base_dir = config.MODELS_DIR / "xtts-v2"
     for f in ("model.pth", "config.json", "vocab.json", "dvae.pth", "mel_stats.pth"):
         if not (base_dir / f).exists():
             raise ValueError("Téléchargez d'abord XTTS v2 dans l'onglet Modèles (fichier manquant : " + f + ").")
+    python = (settings.get("engine_python") or {}).get("xtts-v2") or sys.executable
+    job.update(0.01, "Vérification de l'environnement d'entraînement…")
+    check_training_python(python)
     work = training_dir("xtts", voice.id)
-    job.update(0.01, "Préparation du jeu de données…")
+    job.update(0.02, "Préparation du jeu de données…")
     transcribe = None
     if asr_model_id:
         asr = manager.get(asr_model_id, "asr")
@@ -213,20 +291,39 @@ def finetune_xtts(job: Job, manager, voices: VoiceStore, voice_id: str, epochs: 
     job.update(0.05, f"Jeu de données : {info['clips']} extraits, {info['seconds']} s. Entraînement…")
     # libère le GPU pour l'entraînement
     manager.unload_all()
-    python = (settings.get("engine_python") or {}).get("xtts-v2") or sys.executable
+    devices = training_gpus(gpus)
     params = {"dataset": str(work / "dataset"), "output": str(work / "run"), "base_dir": str(base_dir),
               "language": info["language"], "epochs": int(epochs), "batch_size": int(batch_size),
-              "grad_accum": int(grad_accum)}
+              "grad_accum": int(grad_accum), "precision": precision,
+              "workers": max(2, min(8, (os.cpu_count() or 4) // max(1, len(devices)) - 1))}
 
-    def progress(line: str) -> None:
-        m = re.search(r"EPOCH:\s*(\d+)\s*/\s*(\d+)", line)
-        if m:
-            done, total = int(m.group(1)), max(1, int(m.group(2)))
-            job.update(0.05 + 0.9 * done / total, f"Époque {done + 1}/{total}")
+    def launch(devs: list[str]) -> None:
+        label = f"{len(devs)} GPU" if len(devs) > 1 else "1 GPU"
 
-    run_process(job, [python, "-m", "voiceclone.xtts_train", json.dumps(params)], cwd=config.ROOT_DIR,
-                env={"PYTHONPATH": str(config.ROOT_DIR), **single_gpu_env()}, progress=progress,
-                log_path=work / "train.log")
+        def progress(line: str) -> None:
+            m = re.search(r"EPOCH:\s*(\d+)\s*/\s*(\d+)", line)
+            if m:
+                done, total = int(m.group(1)), max(1, int(m.group(2)))
+                job.update(0.05 + 0.9 * done / total, f"Époque {done + 1}/{total} · {label}")
+
+        p = dict(params, world_size=len(devs), dist_url=f"tcp://127.0.0.1:{free_port()}",
+                 group_id=f"group_{work.name}")
+        env = {"PYTHONPATH": str(config.ROOT_DIR), "CUDA_VISIBLE_DEVICES": ",".join(devs)} if devs else \
+            {"PYTHONPATH": str(config.ROOT_DIR)}
+        cmd = [python, "-m", "voiceclone.xtts_train", json.dumps(p)]
+        job.update(0.05, f"Entraînement sur {label}…")
+        run_process(job, cmd, cwd=config.ROOT_DIR, env={**env, "RANK": "0"}, progress=progress,
+                    log_path=work / "train.log", companions=[{"RANK": str(r)} for r in range(1, len(devs))])
+
+    try:
+        launch(devices)
+    except RuntimeError as exc:
+        if len(devices) < 2 or job.cancelled:
+            raise
+        # le multi-GPU (DDP) peut échouer selon les versions : on retente sur un seul GPU
+        log.warning("Entraînement multi-GPU impossible (%s) : nouvel essai sur un seul GPU.", exc)
+        shutil.rmtree(work / "run", ignore_errors=True)
+        launch(training_gpus("one"))
     result = json.loads((work / "run" / "result.json").read_text(encoding="utf-8"))
     job.update(0.97, "Enregistrement du modèle…")
     model_id = f"xtts-ft-{voice.id}"[:60]

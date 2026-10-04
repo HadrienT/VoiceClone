@@ -123,6 +123,7 @@ $("#tr-voice").addEventListener("change", renderVoiceInfo);
 $("#xtts-go").addEventListener("click", (e) => runJob(e.currentTarget, "/api/training/xtts", {
   voice_id: $("#tr-voice").value, epochs: +$("#xtts-epochs").value, batch_size: +$("#xtts-batch").value,
   grad_accum: +$("#xtts-accum").value, asr_model_id: $("#tr-asr").value || null,
+  gpus: $("#xtts-gpus").value, precision: $("#xtts-precision").value,
 }, $("#xtts-progress")));
 $("#rvc-go").addEventListener("click", (e) => runJob(e.currentTarget, "/api/training/rvc", {
   voice_id: $("#tr-voice").value, epochs: +$("#rvc-epochs").value, batch_size: +$("#rvc-batch").value,

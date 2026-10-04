@@ -453,6 +453,15 @@
             <label class="field">Lot <input type="number" id="xtts-batch" value="2" min="1" max="32" style="width:80px"></label>
             <label class="field">Accumulation <input type="number" id="xtts-accum" value="4" min="1" max="64" style="width:80px"></label>
           </div>
+          <div class="row">
+            <label class="field">GPU <select id="xtts-gpus">
+              <option value="all">Tous les GPU (si plusieurs)</option><option value="one">Un seul GPU</option></select></label>
+            <label class="field">Précision <select id="xtts-precision">
+              <option value="auto">Automatique (bf16 si le GPU le permet)</option><option value="bf16">bf16 (rapide)</option>
+              <option value="fp32">fp32 (lent, référence)</option></select></label>
+          </div>
+          <p class="muted" style="font-size:12px;margin:0">Lot effectif = lot × nombre de GPU × accumulation. Sur un GPU de 24 Go
+            ou plus, un lot de 4 à 8 accélère nettement chaque époque.</p>
           <div class="actions"><button class="btn primary" id="xtts-go">Lancer l'affinage ▶</button></div>
           <div id="xtts-progress" class="result hidden"></div>
         </div>
