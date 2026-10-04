@@ -9,9 +9,37 @@ from ..voices import Voice
 from .base import Engine, EngineError, to_numpy
 
 
+def _import_tone_color_converter():
+    """Importe ToneColorConverter sans exiger les dépendances « texte » d'OpenVoice.
+
+    `openvoice.api` importe `openvoice.text` (jieba, pypinyin, cn2an, eng_to_ipa, inflect…), qui ne
+    sert qu'au TTS d'OpenVoice. Le setup.py d'OpenVoice fige en plus de vieilles versions
+    (faster-whisper 0.9, av 10, numpy 1.22…) impossibles à installer proprement. On installe donc
+    OpenVoice avec --no-deps et, si ce module texte ne s'importe pas, on le remplace par un module vide.
+    """
+    import sys
+    import types
+
+    try:
+        import openvoice.text  # noqa: F401
+    except ImportError:
+        stub = types.ModuleType("openvoice.text")
+
+        def text_to_sequence(*_args, **_kwargs):
+            raise RuntimeError("Le TTS d'OpenVoice n'est pas disponible (seul le convertisseur est utilisé).")
+
+        stub.text_to_sequence = text_to_sequence
+        for name in [m for m in sys.modules if m == "openvoice.text" or m.startswith("openvoice.text.")]:
+            del sys.modules[name]
+        sys.modules["openvoice.text"] = stub
+    from openvoice.api import ToneColorConverter
+
+    return ToneColorConverter
+
+
 class OpenVoiceEngine(Engine):
     def load(self) -> None:
-        from openvoice.api import ToneColorConverter
+        ToneColorConverter = _import_tone_color_converter()
 
         conv_dir = self.model_dir / "converter"
         try:

@@ -123,8 +123,9 @@ MODELS: tuple[ModelSpec, ...] = (
         capabilities=("vc",),
         engine="openvoice:OpenVoiceEngine",
         repos=(HFRepo("myshell-ai/OpenVoiceV2", allow_patterns=("converter/*",)),),
-        packages=("openvoice", "torch"),
-        pip="pip install git+https://github.com/myshell-ai/OpenVoice.git",
+        packages=("openvoice", "torch", "librosa"),
+        # --no-deps : le setup.py d'OpenVoice fige de vieilles versions (faster-whisper 0.9, av 10…)
+        pip="pip install --no-deps git+https://github.com/myshell-ai/OpenVoice.git && pip install librosa",
         languages=("*",),
         license="MIT",
         size_hint="≈ 130 Mo",
