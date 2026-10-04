@@ -306,3 +306,10 @@ dialog.trimmer::backdrop { background: #0008; }
 .wave-wrap .sel { position: absolute; top: 0; bottom: 0; background: #20c99733; border-left: 2px solid var(--accent-2);
   border-right: 2px solid var(--accent-2); pointer-events: none; }
 .wave-wrap .cursor { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); display: none; pointer-events: none; }
+.chapter-list { margin: 6px 0; padding-left: 26px; display: grid; gap: 4px; }
+.chapter-list li { display: flex; gap: 8px; align-items: center; }
+.chapter-list li > input[data-ch-title] { width: 260px; max-width: 40%; }
+.chapter-list li > span.muted { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.chapter-list audio { height: 32px; max-width: 280px; }
+.book { margin-bottom: 10px; }
+@media (max-width: 700px) { .chapter-list li { flex-wrap: wrap; } .chapter-list li > input[data-ch-title] { max-width: none; width: 100%; } }

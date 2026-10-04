@@ -23,6 +23,7 @@
       <button data-tab="tts"><span>💬</span> Texte → Voix</button>
       <button data-tab="s2s"><span>🔁</span> Voix → Voix</button>
       <button data-tab="live"><span>🔴</span> Live / Discord</button>
+      <button data-tab="books"><span>📚</span> Livre audio</button>
       <button data-tab="history"><span>🕘</span> Historique</button>
       <button data-tab="tools"><span>🩺</span> Diagnostic</button>
     </nav>
@@ -350,6 +351,38 @@
     </section>
 
     <!-- ============================== HISTORIQUE ============================== -->
+    <section id="tab-books" class="tab">
+      <header class="page-head">
+        <h1>Livre audio</h1>
+        <p>Un texte, un fichier <b>.txt</b>, <b>.md</b> ou <b>.epub</b> → un fichier audio par chapitre, dans une archive ZIP.
+          La génération continue en arrière-plan.</p>
+      </header>
+      <div class="card">
+        <div class="row">
+          <label class="field grow">Modèle <select id="book-model"></select></label>
+          <label class="field grow">Voix <select id="book-voice"></select></label>
+          <label class="field">Langue <select id="book-lang"></select></label>
+          <label class="field">Format <select id="book-format"><option value="mp3">MP3</option><option value="wav">WAV</option></select></label>
+        </div>
+        <div class="row" style="align-items:flex-end">
+          <label class="field grow">Fichier <input type="file" id="book-file" accept=".txt,.md,.epub,.html,.htm,text/plain,application/epub+zip"></label>
+          <span class="muted" style="padding-bottom:12px">ou</span>
+        </div>
+        <label class="field">Texte collé (les lignes « Chapitre … » ou « # Titre » séparent les chapitres)
+          <textarea id="book-text" rows="5" placeholder="Chapitre 1&#10;Il était une fois…&#10;&#10;Chapitre 2&#10;…"></textarea></label>
+        <div class="actions" style="justify-content:flex-start"><button class="btn" id="book-split">Découper en chapitres</button></div>
+        <div id="book-chapters"></div>
+        <div class="row" style="align-items:center">
+          <label class="field grow">Titre du livre <input id="book-title" placeholder="Mon livre audio"></label>
+          <label class="check" style="margin:0"><input type="checkbox" id="book-announce" checked> Lire le titre de chaque chapitre</label>
+        </div>
+        <div class="actions"><button class="btn primary" id="book-go" disabled>Générer le livre audio ▶</button></div>
+        <div id="book-progress" class="result hidden"></div>
+      </div>
+      <h2 style="margin:24px 0 12px">Bibliothèque</h2>
+      <div id="book-library"></div>
+    </section>
+
     <section id="tab-tools" class="tab">
       <header class="page-head">
         <h1>Diagnostic</h1>

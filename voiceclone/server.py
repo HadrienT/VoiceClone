@@ -52,6 +52,22 @@ class LongTTSRequest(TTSRequest):
     title: str = ""
 
 
+class BookChapter(BaseModel):
+    title: str = Field("", max_length=200)
+    text: str = Field(min_length=1, max_length=200_000)
+
+
+class BookRequest(BaseModel):
+    title: str = Field("Livre audio", max_length=200)
+    chapters: list[BookChapter] = Field(min_length=1, max_length=500)
+    model_id: str
+    voice_id: str
+    language: str = "fr"
+    params: dict = Field(default_factory=dict)
+    format: str = "mp3"  # mp3 | wav
+    announce_titles: bool = True
+
+
 class SegmentRegen(BaseModel):
     text: str | None = Field(None, max_length=2000)
     params: dict | None = None
@@ -509,6 +525,122 @@ def create_app() -> FastAPI:
         full = longform.assemble(loaded, target_sr)
         return history.replace_audio(item_id, full, target_sr, segments=segments,
                                      text=" ".join(sg.get("text", "") for sg in segments if sg["type"] == "text")[:500])
+
+    # ------------------------------------------------------------ livres audio
+    from .books import BookStore, build_zip, parse_upload, write_chapter
+
+    books = BookStore()
+
+    @app.post("/api/books/parse")
+    async def book_parse(file: UploadFile = File(...)):
+        """Découpe un .txt / .md / .epub en chapitres (à relire avant de lancer la génération)."""
+        data = await read_upload(file)
+        try:
+            return parse_upload(file.filename or "livre.txt", data)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/books")
+    def book_create(req: BookRequest):
+        from . import longform
+
+        voice = voices.get(req.voice_id)
+        get_model(req.model_id)
+        book_id = books.new_id()
+        meta = {"id": book_id, "title": req.title, "created_at": time.time(), "model_id": req.model_id,
+                "voice_id": voice.id, "voice_name": voice.name, "language": req.language, "state": "queued",
+                "chapters": [{"title": c.title or f"Chapitre {i}", "chars": len(c.text)}
+                             for i, c in enumerate(req.chapters, 1)]}
+        books.save(book_id, meta)
+
+        def work(job):
+            engine = manager.get(req.model_id, "tts")
+            plans = []
+            for c in req.chapters:
+                head = f"{c.title}. [pause 1s]\n\n" if req.announce_titles and c.title else ""
+                plans.append(longform.parse(head + c.text))
+            total = sum(1 for p in plans for sg in p if sg["type"] == "text") or 1
+            done = 0
+            meta["state"] = "running"
+            t0 = time.time()
+            for ci, (plan, ch) in enumerate(zip(plans, meta["chapters"])):
+                wavs, sr = {}, 24000
+                for i, sg in enumerate(plan):
+                    if sg["type"] != "text":
+                        continue
+                    job.update(done / total, f"Chapitre {ci + 1}/{len(plans)} · phrase {done + 1}/{total}")
+                    with manager.infer_lock:
+                        wavs[i], sr = engine.tts(sg["text"], voice, req.language, **req.params)
+                    done += 1
+                full = longform.assemble([(sg, wavs.get(i)) for i, sg in enumerate(plan)], sr)
+                if settings.get("watermark"):
+                    from . import watermark
+
+                    full = watermark.embed(full, sr)
+                path = write_chapter(books.root / book_id / f"{ci + 1:03d}", full, sr, req.format)
+                ch.update(file=path.name, duration=round(len(full) / sr, 2))
+                books.save(book_id, meta)
+            meta["zip"] = build_zip(books.root / book_id, meta)
+            meta.update(state="done", seconds=round(time.time() - t0, 1),
+                        duration=round(sum(c.get("duration", 0) for c in meta["chapters"]), 1))
+            books.save(book_id, meta)
+            return {"book_id": book_id, "duration": meta["duration"]}
+
+        def guarded(job):
+            try:
+                return work(job)
+            except BaseException as exc:
+                meta["state"] = "cancelled" if job.cancelled else "error"
+                meta["error"] = str(exc) or type(exc).__name__
+                books.save(book_id, meta)
+                raise
+
+        job = jobs.submit("book", f"📚 {req.title}", guarded)
+        meta["job_id"] = job.id
+        books.save(book_id, meta)
+        return {"book": meta, "job": job.to_dict()}
+
+    def book_state(meta: dict) -> dict:
+        if meta.get("state") in ("queued", "running") and meta.get("job_id"):
+            try:
+                job = jobs.get(meta["job_id"])
+                meta["progress"] = job.progress
+                if job.state in ("cancelled", "error"):
+                    meta["state"] = job.state
+            except KeyError:  # serveur redémarré pendant la génération
+                meta["state"] = "error"
+                meta["error"] = "Génération interrompue (redémarrage du serveur)."
+        return meta
+
+    @app.get("/api/books")
+    def book_list():
+        return [book_state(b) for b in books.list()]
+
+    @app.get("/api/books/{book_id}")
+    def book_get(book_id: str):
+        return book_state(books.get(book_id))
+
+    @app.get("/api/books/{book_id}/chapters/{index}")
+    def book_chapter(book_id: str, index: int):
+        path = books.chapter_path(book_id, index)
+        return FileResponse(path, media_type="audio/mpeg" if path.suffix == ".mp3" else "audio/wav",
+                            filename=path.name)
+
+    @app.get("/api/books/{book_id}/zip")
+    def book_zip(book_id: str):
+        path = books.zip_path(book_id)
+        return FileResponse(path, media_type="application/zip", filename=path.name)
+
+    @app.delete("/api/books/{book_id}")
+    def book_delete(book_id: str):
+        meta = books.get(book_id)
+        if meta.get("job_id") and meta.get("state") in ("queued", "running"):
+            try:
+                jobs.cancel(meta["job_id"])
+            except KeyError:
+                pass
+        books.delete(book_id)
+        return {"ok": True}
 
     # ------------------------------------------------------------ filigrane
     @app.post("/api/watermark/detect")
