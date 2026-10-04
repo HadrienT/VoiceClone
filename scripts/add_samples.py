@@ -10,6 +10,7 @@ Exemples (depuis la racine du dépôt) :
     .venv/bin/python scripts/add_samples.py "Ma voix" mon_audio.wav --split          # découpe à la volée
     .venv/bin/python scripts/add_samples.py "Ma voix" mon_audio.wav --auto           # nettoie + garde le meilleur
     .venv/bin/python scripts/add_samples.py --create "Nouvelle voix" --lang fr --consent mon_audio.wav --split
+    .venv/bin/python scripts/add_samples.py "Ma voix" longue_interview.wav --training  # audio d'entraînement, sans limite
 
 Si le serveur a été lancé avec VOICECLONE_DATA, définissez la même variable pour ce script.
 """
@@ -57,6 +58,8 @@ def main() -> None:
                    help="préparation automatique : nettoyage, découpe, ne garde que les meilleurs passages")
     p.add_argument("--target", type=float, default=30.0, help="avec --auto : secondes de voix à garder (défaut 30)")
     p.add_argument("--no-denoise", action="store_true", help="avec --auto : ne pas débruiter")
+    p.add_argument("--training", action="store_true",
+                   help="ajouter à l'audio d'entraînement (affinage XTTS / RVC) : tout est gardé, sans limite de durée")
     p.add_argument("--max", type=float, default=11.0, help="avec --split : durée max d'un morceau (défaut 11)")
     p.add_argument("--min", type=float, default=4.0, help="avec --split : durée min d'un morceau (défaut 4)")
     args = p.parse_args()
@@ -84,6 +87,20 @@ def main() -> None:
                      + ", ".join(repr(v.name) for v in store.list()) + " (ou utilisez --create)")
     if not files:
         p.error("aucun fichier à ajouter")
+
+    if args.training:
+        for f in files:
+            try:
+                voice, rep = store.add_training_audio(
+                    voice.id, f.read_bytes(), f.name, enhance=not args.no_denoise,
+                    progress=lambda x, f=f: print(f"\r  {f.name} : {round(x * 100)} %", end="", flush=True))
+                print(f"\r  + {f.name} : {rep['duration']} s analysées → {rep['clips']} extraits, "
+                      f"{rep['kept_duration']} s gardées ({rep['rejected']} passages écartés)")
+            except Exception as exc:
+                print(f"  ! {f} ignoré : {exc}")
+        total = sum(t["duration"] for t in voice.training)
+        print(f"Audio d'entraînement de {voice.name!r} : {len(voice.training)} extraits, {total / 60:.1f} min.")
+        return
 
     added = 0
     for f in files:

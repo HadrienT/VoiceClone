@@ -428,6 +428,21 @@
         </div>
         <p id="tr-info" class="muted" style="font-size:13px;margin:0"></p>
       </div>
+      <div class="card">
+        <h3>📼 Audio d'entraînement <small class="muted">— sans limite de durée, distinct des 30 s de référence du clonage</small></h3>
+        <div class="row" style="align-items:stretch">
+          <div id="tr-drop" class="dropzone small grow">
+            <p><strong>Glissez vos longs enregistrements</strong> ou cliquez (plusieurs fichiers, plusieurs minutes ou heures)</p>
+            <input id="tr-file" type="file" accept="audio/*,video/*" multiple hidden>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="tr-enhance" checked> Nettoyer le son (réduction de bruit)</label>
+        <p class="muted" style="font-size:12px;margin:4px 0 8px">Tout est gardé sauf les passages sans parole, saturés ou très bruités,
+          découpé en phrases de 3 à 11 s. Fichiers déjà sur le serveur :
+          <code>python scripts/add_samples.py "Ma voix" fichier.wav --training</code></p>
+        <div id="tr-upload-progress" class="result hidden"></div>
+        <div id="tr-audio"></div>
+      </div>
       <div class="grid2">
         <div class="card">
           <h3>🗣️ Affiner XTTS v2 sur cette voix</h3>

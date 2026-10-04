@@ -212,7 +212,8 @@ def score_segment(seg: np.ndarray, original: np.ndarray, sr: int, floor_db: floa
 
 
 def auto_prepare(x: np.ndarray, sr: int, enhance: bool = True, target_s: float = 30.0,
-                 min_s: float = 3.0, max_s: float = 11.0, method: str = "auto") -> tuple[list[np.ndarray], dict]:
+                 min_s: float = 3.0, max_s: float = 11.0, method: str = "auto",
+                 min_snr_db: float = MIN_SNR_DB) -> tuple[list[np.ndarray], dict]:
     """Nettoie, découpe, note et sélectionne. Renvoie les morceaux gardés (meilleur d'abord) et un rapport."""
     x = audio.to_mono(x)
     cleaned, info = clean(x, sr, enhance, method)
@@ -231,7 +232,7 @@ def auto_prepare(x: np.ndarray, sr: int, enhance: bool = True, target_s: float =
             seg.reason = "presque pas de parole"
         elif seg.clipping > 0.01:
             seg.reason = "son saturé"
-        elif seg.snr_db < MIN_SNR_DB:
+        elif seg.snr_db < min_snr_db:
             seg.reason = "trop de bruit"
         segments.append(seg)
         pieces[i] = part

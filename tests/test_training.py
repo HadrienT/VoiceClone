@@ -202,3 +202,71 @@ def test_xtts_child_sees_one_gpu(client, tmp_path, monkeypatch):
     monkeypatch.setattr(training, "run_process", spy)
     test_xtts_finetune_flow(client, tmp_path)
     assert seen["CUDA_VISIBLE_DEVICES"] == "1"
+
+
+def _long_speech(seconds=40.0, sr=44100):
+    """Parole synthétique en « phrases » de 2 à 7 s séparées de silences."""
+    import io
+
+    import numpy as np
+    import soundfile as sf
+
+    rng = np.random.default_rng(3)
+    parts = []
+    while sum(len(p) for p in parts) < seconds * sr:
+        n = int(rng.uniform(2.0, 7.0) * sr)
+        t = np.arange(n) / sr
+        f0 = 140 + 30 * np.sin(2 * np.pi * 0.5 * t)
+        ph = 2 * np.pi * np.cumsum(f0) / sr
+        x = sum(np.sin(k * ph) / k for k in range(1, 8)) * (0.6 + 0.4 * np.sin(2 * np.pi * 3 * t)) * 0.25
+        parts += [x, np.zeros(int(0.6 * sr))]
+    y = np.concatenate(parts).astype(np.float32) + 0.001 * rng.standard_normal(sum(len(p) for p in parts)).astype(np.float32)
+    buf = io.BytesIO()
+    sf.write(buf, y, sr, format="WAV")
+    return buf.getvalue()
+
+
+def test_training_audio_keeps_everything(client, monkeypatch):
+    from voiceclone import voices as vmod
+
+    monkeypatch.setattr(vmod, "TRAINING_WINDOW_S", 20)  # force le traitement par tranches
+    v = _voice(client, n=1)
+    job = client.post(f"/api/voices/{v['id']}/training-audio",
+                      files=[("files", ("long.wav", _long_speech(70.0), "audio/wav"))]).json()
+    j = _wait(client, job["id"])
+    assert j["state"] == "done", j
+    rep = j["result"]["reports"][0]
+    assert rep["duration"] >= 69 and rep["kept_duration"] > 50  # bien plus que les 30 s de la référence
+    voice = client.app.state.voices.get(v["id"])
+    assert len(voice.training) == rep["clips"] >= 8
+    assert all(1.0 <= t["duration"] <= 11.5 for t in voice.training)
+    assert voice.to_dict()["training_duration"] > 50
+    assert voice.to_dict()["duration"] < 10  # la référence de clonage n'est pas touchée
+    name = voice.training[0]["file"].split("/")[1]
+    assert client.get(f"/api/voices/{v['id']}/training-audio/{name}").status_code == 200
+    # le jeu de données XTTS utilise tout cet audio, et garde les transcriptions obtenues
+    info = training.build_xtts_dataset(voice, config.DATA_DIR / "ds", transcribe=lambda x, sr: "texte")
+    assert info["clips"] == len(voice.training) + 1 and len(info["learned"]) == len(voice.training)
+    client.app.state.voices.set_training_transcripts(v["id"], info["learned"])
+    calls = []
+    training.build_xtts_dataset(client.app.state.voices.get(v["id"]), config.DATA_DIR / "ds2",
+                                transcribe=lambda x, sr: calls.append(1) or "t")
+    assert calls == [1]  # seul l'échantillon de clonage non transcrit ; l'audio d'entraînement est en cache
+    assert len(client.delete(f"/api/voices/{v['id']}/training-audio/{name}").json()["training"]) == len(voice.training) - 1
+    assert client.delete(f"/api/voices/{v['id']}/training-audio").json()["training"] == []
+
+
+def test_add_samples_cli_training(tmp_path):
+    import subprocess
+
+    from tests.test_scripts import ROOT
+
+    src = tmp_path / "long.wav"
+    src.write_bytes(_long_speech(30.0))
+    env = {"VOICECLONE_DATA": str(tmp_path / "data"), "PATH": "/usr/bin:/bin"}
+    run = lambda *a: subprocess.run([sys.executable, str(ROOT / "scripts/add_samples.py"), *a],  # noqa: E731
+                                    capture_output=True, text=True, env=env)
+    assert run("--create", "Moi", "--consent", str(src)).returncode == 0
+    r = run("Moi", str(src), "--training")
+    assert r.returncode == 0, r.stderr
+    assert "Audio d'entraînement de 'Moi'" in r.stdout and "extraits" in r.stdout
