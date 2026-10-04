@@ -8,3 +8,5 @@ soundfile>=0.12
 huggingface_hub>=0.23
 # Temps réel (micro -> câble virtuel -> Discord). Nécessite PortAudio.
 sounddevice>=0.4.6
+# Compression Opus du flux Live navigateur ↔ serveur (optionnel : sans lui, repli PCM)
+av>=12

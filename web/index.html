@@ -255,9 +255,30 @@
               <input type="range" id="live-og" min="0" max="4" step="0.1" value="1"></label>
             <label class="param vc-only">Ma voix (source, optionnel)
               <select id="live-src"></select></label>
+            <label class="param browser-only">Porte de bruit (navigateur) <span><b id="v-gate">-90</b> dB</span>
+              <input type="range" id="live-gate" min="-90" max="-20" step="1" value="-90">
+              <small class="muted">Sous ce niveau, rien n'est envoyé (-90 = désactivée).</small></label>
+            <label class="check browser-only" style="margin:0"><input type="checkbox" id="live-opus" checked>
+              Compression Opus du flux (≈ 20× moins de débit)</label>
+            <label class="check" style="margin:0"><input type="checkbox" id="live-warmup" checked>
+              Préchauffer le modèle au démarrage</label>
           </div>
           <div id="live-params" class="params"></div>
         </details>
+
+        <div class="row browser-only" style="align-items:center">
+          <label class="field">🎙 Micro
+            <select id="live-mic-mode">
+              <option value="open">Toujours actif</option>
+              <option value="ptt">Appuyer pour parler</option>
+              <option value="mute">Coupé</option>
+            </select></label>
+          <label class="field ptt-only">Touche
+            <button class="btn" id="live-ptt-key" title="Cliquez puis appuyez sur la touche voulue">…</button></label>
+          <span class="muted ptt-only" style="font-size:12px;max-width:340px">Le navigateur ne capte les touches que si
+            cet onglet a le focus. Raccourci muet : <b>Ctrl+M</b>.</span>
+          <span id="live-mic-state" class="badge"></span>
+        </div>
 
         <div class="live-panel">
           <button class="btn big" id="live-toggle">▶ Démarrer</button>
@@ -265,12 +286,27 @@
             <div class="stat"><span>Micro</span><div class="meter"><div id="live-in-meter"></div></div></div>
             <div class="stat"><span>Sortie</span><div class="meter out"><div id="live-out-meter"></div></div></div>
             <div class="kv"><span>État</span><b id="live-state">arrêté</b></div>
+            <div class="kv"><span>Latence estimée</span><b id="live-lat">–</b></div>
+            <div class="kv"><span>Réseau / codec</span><b id="live-rtt">–</b></div>
             <div class="kv"><span>Calcul / morceau</span><b id="live-proc">–</b></div>
             <div class="kv"><span>Tampon</span><b id="live-buf">–</b></div>
             <div class="kv"><span>Morceaux / sautés</span><b id="live-chunks">–</b></div>
           </div>
         </div>
         <div id="live-error" class="notice error hidden"></div>
+        <div id="live-notice" class="notice info hidden"></div>
+
+        <div class="say-box">
+          <h3 style="margin:0 0 8px">💬 Dire dans le Live <small class="muted">(avec la voix clonée, mêlé au flux envoyé à Discord)</small></h3>
+          <div class="row" style="margin:0">
+            <label class="field">Modèle de synthèse <select id="live-say-model"></select></label>
+            <label class="field grow">Texte
+              <input id="live-say-text" maxlength="1000" placeholder="Tapez une phrase puis Entrée…"></label>
+            <button class="btn primary" id="live-say-go">Dire ▶</button>
+            <button class="btn" id="live-say-fav-add" title="Ajouter aux phrases favorites">☆</button>
+          </div>
+          <div id="live-say-favs" class="badges" style="margin-top:8px"></div>
+        </div>
         <div id="live-transcripts" class="transcripts hidden"></div>
       </div>
 

@@ -218,6 +218,7 @@ function refreshModelSelects() {
   const liveCap = state.liveMode === "asr_tts" ? "tts" : "vc";
   fillSelect($("#live-model"), opts(liveCap), { value: $("#live-model").value || store.get(`live.model.${liveCap}`) });
   fillSelect($("#live-asr"), opts("asr"), { value: store.get("asr.model") });
+  fillSelect($("#live-say-model"), opts("tts"), { value: $("#live-say-model").value || store.get("live.say.model"), empty: "Aucun modèle de synthèse" });
   onTTSModelChange();
   onS2SModelChange();
   onLiveModelChange();
@@ -976,11 +977,15 @@ $("#live-where").addEventListener("click", (e) => {
   if (!b || state.liveRunning) return;
   state.liveWhere = b.dataset.where;
   store.set("live.where", state.liveWhere);
-  $$("#live-where button").forEach((x) => x.classList.toggle("active", x === b));
+  applyLiveWhere();
   loadDevices();
   pollLive(true);
 });
-$$("#live-where button").forEach((x) => x.classList.toggle("active", x.dataset.where === state.liveWhere));
+function applyLiveWhere() {
+  $$("#live-where button").forEach((x) => x.classList.toggle("active", x.dataset.where === state.liveWhere));
+  $$("#tab-live .browser-only").forEach((el) => el.classList.toggle("hidden", state.liveWhere !== "browser"));
+}
+applyLiveWhere();
 
 const intOrNull = (v) => (v === "" || v === undefined ? null : parseInt(v, 10));
 
@@ -996,6 +1001,8 @@ function liveSettings() {
     chunk_ms: v("#live-chunk"), context_ms: v("#live-ctx"), silence_db: v("#live-th"),
     end_silence_ms: v("#live-eos"), input_gain: v("#live-ig"), output_gain: v("#live-og"),
     params: readParams($("#live-params")),
+    say_model_id: $("#live-say-model").value || null,
+    warmup: $("#live-warmup").checked,
   };
 }
 
@@ -1014,7 +1021,8 @@ $("#live-toggle").addEventListener("click", (e) => busy(e.currentTarget, state.l
         renderLiveStatus({ state: "idle" });
       } else {
         renderLiveStatus({ state: "starting" });
-        await browserLive.start(liveSettings(), { input: $("#live-in").value, output: $("#live-out").value, monitor: $("#live-mon").value });
+        await browserLive.start(liveSettings(), { input: $("#live-in").value, output: $("#live-out").value, monitor: $("#live-mon").value },
+          { opus: $("#live-opus").checked });
         toast("Live démarré — parlez !", "ok");
         loadModels();
       }
@@ -1044,13 +1052,18 @@ $("#live-toggle").addEventListener("click", (e) => busy(e.currentTarget, state.l
 const dbToPct = (db) => Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
 
 function renderLiveStatus(s) {
-  state.liveRunning = s.state === "running" || s.state === "starting";
+  state.liveRunning = ["running", "starting", "reconnecting"].includes(s.state);
   if (!$("#live-toggle").disabled) syncLiveButton(); // pendant un clic, c'est la fin du clic qui le met à jour
-  const names = { idle: "arrêté", starting: "démarrage…", running: "en direct 🔴", error: "erreur" };
+  const names = { idle: "arrêté", starting: "démarrage…", running: "en direct 🔴", error: "erreur", reconnecting: "reconnexion…" };
   $("#live-state").textContent = names[s.state] || s.state;
   $("#live-in-meter").style.width = `${dbToPct(s.input_db ?? -120)}%`;
   $("#live-out-meter").style.width = `${dbToPct(s.output_db ?? -120)}%`;
   $("#live-proc").textContent = s.process_ms ? `${Math.round(s.process_ms)} ms` : "–";
+  $("#live-lat").textContent = state.liveRunning && s.latency_ms ? `≈ ${Math.round(s.latency_ms)} ms` : "–";
+  $("#live-rtt").textContent = state.liveRunning && state.liveWhere === "browser"
+    ? `${s.rtt_ms != null ? `${Math.round(s.rtt_ms)} ms` : "…"} · ${s.codec === "opus" ? "Opus" : "PCM"}` : "–";
+  if (s.notice) showLiveNotice(s.notice);
+  renderMicState();
   $("#live-buf").textContent = state.liveRunning && s.buffer_ms !== undefined ? `${s.buffer_ms} ms` : "–";
   $("#live-chunks").textContent = state.liveRunning && s.chunks !== undefined ? `${s.chunks} / ${s.dropped}` : "–";
   $("#live-error").textContent = s.error || "";
@@ -1143,3 +1156,114 @@ function initLangs() {
   applyLiveMode();
   showTab(state.tab);
 })();
+
+// ------------------------------------------------ Live : messages, micro, texte dit
+let liveNoticeTimer;
+function showLiveNotice(text) {
+  $("#live-notice").textContent = text;
+  $("#live-notice").classList.remove("hidden");
+  clearTimeout(liveNoticeTimer);
+  liveNoticeTimer = setTimeout(() => $("#live-notice").classList.add("hidden"), 6000);
+}
+
+const keyName = (code) => code.replace(/^Key/, "").replace(/^Digit/, "");
+state.pttKey = store.get("live.ptt.key", "Space");
+
+function renderMicState() {
+  const mode = browserLive.micMode;
+  $$("#tab-live .ptt-only").forEach((el) => el.classList.toggle("hidden", mode !== "ptt"));
+  $("#live-ptt-key").textContent = keyName(state.pttKey);
+  const open = browserLive.micOpen();
+  const el = $("#live-mic-state");
+  el.textContent = mode === "mute" ? "🔇 coupé" : mode === "ptt" ? (open ? "🎙 émission" : `maintenez ${keyName(state.pttKey)}`) : "🎙 ouvert";
+  el.className = `badge ${open ? "on" : "off"}`;
+}
+function setMicMode(mode) {
+  browserLive.micMode = mode;
+  browserLive.pttDown = false;
+  $("#live-mic-mode").value = mode;
+  store.set("live.mic.mode", mode);
+  renderMicState();
+}
+$("#live-mic-mode").addEventListener("change", (e) => setMicMode(e.target.value));
+setMicMode(store.get("live.mic.mode", "open"));
+
+$("#live-gate").addEventListener("input", (e) => {
+  browserLive.gateDb = parseFloat(e.target.value);
+  $("#v-gate").textContent = e.target.value;
+  store.set("live.gate", e.target.value);
+});
+$("#live-gate").value = store.get("live.gate", "-90");
+$("#live-gate").dispatchEvent(new Event("input"));
+$("#live-opus").checked = store.get("live.opus", true);
+$("#live-opus").addEventListener("change", (e) => store.set("live.opus", e.target.checked));
+$("#live-warmup").checked = store.get("live.warmup", true);
+$("#live-warmup").addEventListener("change", (e) => store.set("live.warmup", e.target.checked));
+
+let capturingKey = false;
+$("#live-ptt-key").addEventListener("click", () => {
+  capturingKey = true;
+  $("#live-ptt-key").textContent = "appuyez…";
+});
+const typing = (e) => e.target.closest("input, textarea, select, [contenteditable]");
+document.addEventListener("keydown", (e) => {
+  if (capturingKey) {
+    e.preventDefault();
+    capturingKey = false;
+    state.pttKey = e.code;
+    store.set("live.ptt.key", e.code);
+    return renderMicState();
+  }
+  if (state.tab !== "live" || typing(e)) return;
+  if (e.ctrlKey && e.code === "KeyM") {
+    e.preventDefault();
+    return setMicMode(browserLive.micMode === "mute" ? store.get("live.mic.unmute", "open") : (store.set("live.mic.unmute", browserLive.micMode), "mute"));
+  }
+  if (browserLive.micMode === "ptt" && e.code === state.pttKey) {
+    e.preventDefault();
+    if (!browserLive.pttDown) { browserLive.pttDown = true; renderMicState(); }
+  }
+});
+document.addEventListener("keyup", (e) => {
+  if (browserLive.micMode === "ptt" && e.code === state.pttKey) { browserLive.pttDown = false; renderMicState(); }
+});
+window.addEventListener("blur", () => { if (browserLive.pttDown) { browserLive.pttDown = false; renderMicState(); } });
+
+// Texte → Live (Discord) + phrases favorites
+const sayFavs = () => store.get("live.say.favs", []);
+function renderSayFavs() {
+  $("#live-say-favs").innerHTML = sayFavs().map((t, i) =>
+    `<span class="fav-chip"><a href="#" data-say="${i}">${esc(t)}</a><button data-unfav="${i}" title="Retirer">×</button></span>`).join("")
+    || '<small class="muted">Phrases favorites : tapez une phrase puis ☆ pour la garder sous la main.</small>';
+}
+async function liveSay(text) {
+  text = (text || "").trim();
+  if (!text) return;
+  if (!state.liveRunning) return toast("Démarrez le Live d'abord.", "error");
+  store.set("live.say.model", $("#live-say-model").value);
+  try {
+    if (state.liveWhere === "browser") browserLive.say(text);
+    else await api("/api/realtime/say", { json: { text, model_id: $("#live-say-model").value || null } });
+    showLiveNotice(`💬 « ${text.slice(0, 80)} » envoyé`);
+  } catch (err) {
+    toast(err.message, "error", 6000);
+  }
+}
+$("#live-say-go").addEventListener("click", () => { liveSay($("#live-say-text").value); $("#live-say-text").value = ""; });
+$("#live-say-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("#live-say-go").click(); }
+});
+$("#live-say-model").addEventListener("change", (e) => store.set("live.say.model", e.target.value));
+$("#live-say-fav-add").addEventListener("click", () => {
+  const t = $("#live-say-text").value.trim();
+  if (!t) return toast("Tapez d'abord une phrase.", "error");
+  store.set("live.say.favs", [...new Set([...sayFavs(), t])].slice(0, 30));
+  renderSayFavs();
+});
+$("#live-say-favs").addEventListener("click", (e) => {
+  const say = e.target.closest("[data-say]");
+  const un = e.target.closest("[data-unfav]");
+  if (say) { e.preventDefault(); liveSay(sayFavs()[+say.dataset.say]); }
+  if (un) { const f = sayFavs(); f.splice(+un.dataset.unfav, 1); store.set("live.say.favs", f); renderSayFavs(); }
+});
+renderSayFavs();

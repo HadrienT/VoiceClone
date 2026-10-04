@@ -112,6 +112,17 @@ class AudioFifo:
         return self._size / self.sr
 
 
+def sola_offset(tail: np.ndarray, seg: np.ndarray, search: int) -> int:
+    """Décalage (0..search) de `seg` qui maximise la corrélation normalisée avec `tail`."""
+    n = len(tail)
+    if search <= 0 or len(seg) < n + search or n == 0:
+        return 0
+    window = seg[: n + search]
+    corr = np.correlate(window, tail, mode="valid")  # longueur search + 1
+    energy = np.sqrt(np.convolve(window * window, np.ones(n), mode="valid")) + 1e-8
+    return int(np.argmax(corr / energy))
+
+
 @dataclass
 class RealtimeConfig:
     mode: str = "vc"  # vc | asr_tts | passthrough
@@ -131,6 +142,8 @@ class RealtimeConfig:
     input_gain: float = 1.0
     output_gain: float = 1.0
     params: dict = field(default_factory=dict)
+    say_model_id: str | None = None  # modèle TTS pour le texte tapé (« Dire dans Discord »)
+    warmup: bool = True  # inférence à blanc au démarrage : évite la latence du tout premier morceau
 
 
 class RealtimeSession:
@@ -167,8 +180,61 @@ class RealtimeSession:
             "chunks": self.chunks,
             "dropped": self.dropped,
             "transcripts": list(self.transcripts),
+            "latency_ms": self.estimated_latency_ms(),
             "uptime": round(time.time() - self.started_at, 1) if self.started_at and self.state == "running" else 0,
         }
+
+    def estimated_latency_ms(self) -> int:
+        """Latence côté serveur : attente d'un morceau + calcul + tampon de sortie (hors réseau)."""
+        if not self.cfg or self.state != "running":
+            return 0
+        buffer_ms = (self._out.seconds if self._out else 0) * 1000
+        if self.cfg.mode == "vc":
+            return round(self.cfg.chunk_ms + self.process_ms + buffer_ms)
+        if self.cfg.mode == "asr_tts":
+            last = next((t for t in reversed(self.transcripts) if "first_audio_ms" in t), None)
+            return round(self.cfg.end_silence_ms + (last["first_audio_ms"] if last else 0) + buffer_ms)
+        return round(20 + buffer_ms)
+
+    def say(self, text: str) -> None:
+        """Fait dire un texte tapé à la voix clonée, mêlé au flux du Live (ex. vers Discord)."""
+        text = (text or "").strip()
+        if self.state != "running" or not text:
+            raise ValueError("Démarrez le Live et tapez un texte.")
+        model_id = self.cfg.say_model_id or (self.cfg.model_id if self.cfg.mode == "asr_tts" else None)
+        if not model_id:
+            raise ValueError("Choisissez le modèle de synthèse pour le texte tapé.")
+        if not getattr(self, "voice", None):
+            if not self.cfg.voice_id:
+                raise ValueError("Choisissez une voix.")
+            self.voice = self.voices.get(self.cfg.voice_id)
+        entry = {"text": text, "at": time.time(), "typed": True}
+        self.transcripts.append(entry)
+
+        def run():
+            engine = self.manager.get(model_id, "tts")
+            t0 = time.perf_counter()
+            gen = engine.tts_stream(text, self.voice, self.cfg.language, **self.cfg.params)
+            while not self._stop.is_set():
+                with self.manager.infer_lock:
+                    piece = next(gen, None)
+                if piece is None:
+                    break
+                entry.setdefault("first_audio_ms", round((time.perf_counter() - t0) * 1000))
+                self._emit(*piece)
+
+        t = threading.Thread(target=self._guard_say(run), daemon=True, name="rt-say")
+        self._threads.append(t)
+        t.start()
+
+    def _guard_say(self, fn):
+        def run():
+            try:
+                fn()
+            except Exception as exc:  # une phrase ratée ne doit pas couper le Live
+                log.exception("Échec du texte tapé")
+                self.transcripts.append({"text": f"⚠ {exc}", "at": time.time(), "typed": True})
+        return run
 
     def start(self, cfg: RealtimeConfig) -> None:
         if self.state in ("starting", "running"):
@@ -233,8 +299,22 @@ class RealtimeSession:
             self.engine = self.manager.get(cfg.model_id, "tts")
         with self.manager.infer_lock:
             self.engine.prepare_voice(self.voice)
+            if cfg.warmup:
+                self._warmup(cfg)
         if hasattr(self.engine, "reset_stream"):
             self.engine.reset_stream()
+
+    def _warmup(self, cfg: RealtimeConfig) -> None:
+        """Inférence à blanc : charge les noyaux GPU / caches pour que le 1er vrai morceau soit rapide."""
+        rng = np.random.default_rng(0)
+        x = (0.01 * rng.standard_normal(16000 // 2)).astype(np.float32)
+        try:
+            if cfg.mode == "vc":
+                self.engine.convert(x, 16000, self.voice, **cfg.params)
+            else:
+                self.asr.transcribe(x, 16000, cfg.language)
+        except Exception as exc:  # le préchauffage est une optimisation : il ne doit jamais bloquer
+            log.warning("Préchauffage ignoré : %s", exc)
 
     def _check_io(self) -> None:
         """Vérifie au plus tôt que l'audio est disponible (avant de charger les modèles)."""
@@ -366,9 +446,13 @@ class RealtimeSession:
             start = max(0, int(len(context) * ratio) - fade_n)
             context = chunk[-ctx_n:] if ctx_n else context[:0]
             seg = y[start:].astype(np.float32)
-            if len(seg) <= 2 * fade_n:
+            if len(seg) <= 2 * fade_n + int(out_sr * 0.012):
                 continue
             if prev_tail is not None and len(prev_tail) == fade_n and fade_n:
+                # Alignement (SOLA) : décale le début du morceau pour qu'il soit en phase avec la fin
+                # du précédent, ce qui évite l'effet « robot » / les annulations dans le fondu
+                k = sola_offset(prev_tail, seg, int(out_sr * 0.012))
+                seg = seg[k:]
                 ramp = np.linspace(0, 1, fade_n, dtype=np.float32)
                 seg[:fade_n] = prev_tail * (1 - ramp) + seg[:fade_n] * ramp
             elif fade_n:
@@ -452,11 +536,12 @@ class BrowserRealtimeSession(RealtimeSession):
 
     OUT_SR = 24000
 
-    def __init__(self, manager: EngineManager, voices: VoiceStore, in_sr: int, on_audio) -> None:
+    def __init__(self, manager: EngineManager, voices: VoiceStore, in_sr: int, on_audio,
+                 out_sr: int | None = None) -> None:
         super().__init__(manager, voices)
         self.in_sr = int(in_sr)
-        self.out_sr = self.OUT_SR
-        self.on_audio = on_audio
+        self.out_sr = int(out_sr or self.OUT_SR)
+        self.on_audio = on_audio  # reçoit du float32 mono à out_sr
 
     def _check_io(self) -> None:
         pass  # aucun périphérique côté serveur
@@ -475,6 +560,6 @@ class BrowserRealtimeSession(RealtimeSession):
     def _emit(self, x: np.ndarray, sr: int) -> None:
         if len(x) == 0:
             return
-        y = np.clip(audio.resample(x, sr, self.out_sr) * self.cfg.output_gain, -1.0, 1.0)
+        y = np.clip(audio.resample(x, sr, self.out_sr) * self.cfg.output_gain, -1.0, 1.0).astype(np.float32)
         self.out_db = 0.8 * self.out_db + 0.2 * audio.rms_db(y)
-        self.on_audio((y * 32767).astype("<i2").tobytes())
+        self.on_audio(y)

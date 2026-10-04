@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -15,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, audio, config
+from . import __version__, audio, config, opus
 from . import device as devmod
 from .downloads import DownloadManager
 from .engines.base import EngineError
@@ -91,6 +92,12 @@ class RealtimeStart(BaseModel):
     input_gain: float = Field(1.0, ge=0, le=10)
     output_gain: float = Field(1.0, ge=0, le=10)
     params: dict = Field(default_factory=dict)
+    say_model_id: str | None = None
+    warmup: bool = True
+
+
+class SayRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
 
 
 # ------------------------------------------------------------------- app
@@ -452,6 +459,11 @@ def create_app() -> FastAPI:
     def rt_status():
         return live.status()
 
+    @app.post("/api/realtime/say")
+    def rt_say(body: SayRequest):
+        live.say(body.text)
+        return {"ok": True}
+
     @app.websocket("/api/realtime/ws")
     async def rt_browser(ws: WebSocket):
         """Live via le navigateur : micro du PC -> serveur (GPU) -> sortie choisie dans le navigateur.
@@ -481,28 +493,57 @@ def create_app() -> FastAPI:
                 if session is not None:
                     outbox.put_nowait({"type": "status", **session.status()})
 
+        async def handle_control(sess, ctrl: dict, box: asyncio.Queue):
+            kind = ctrl.get("type")
+            if kind == "silence":  # micro coupé / porte de bruit : du silence sans le transmettre
+                sess.feed(np.zeros(max(0, min(int(ctrl.get("n", 0)), sess.in_sr)), dtype=np.float32))
+            elif kind == "ping":  # mesure de l'aller-retour réseau par le navigateur
+                box.put_nowait({"type": "pong", "t": ctrl.get("t")})
+            elif kind == "say":
+                try:
+                    sess.say(ctrl.get("text", ""))
+                except Exception as exc:
+                    box.put_nowait({"type": "notice", "detail": str(exc)})
+
         tasks = [asyncio.create_task(sender())]
         try:
             raw = await ws.receive_json()
             in_sr = int(raw.pop("sample_rate", 48000))
+            # Opus si le navigateur le propose, que PyAV est installé et que la fréquence s'y prête
+            use_opus = raw.pop("codec", "pcm") == "opus" and opus.available() and in_sr in opus.OPUS_RATES
+            decoder = opus.OpusDecoder(in_sr) if use_opus else None
+            encoder = opus.OpusEncoder(48000) if use_opus else None
+
+            def on_audio(y: np.ndarray) -> None:  # appelé depuis le thread de traitement
+                if encoder is not None:
+                    for packet in encoder.encode(y):
+                        loop.call_soon_threadsafe(outbox.put_nowait, packet)
+                else:
+                    loop.call_soon_threadsafe(outbox.put_nowait, (y * 32767).astype("<i2").tobytes())
+
             fields = set(RealtimeStart.model_fields) - {"input_device", "output_device", "monitor_device"}
             cfg = RealtimeConfig(**RealtimeStart(**{k: v for k, v in raw.items() if k in fields}).model_dump(
                 exclude={"input_device", "output_device", "monitor_device"}))
-            session = BrowserRealtimeSession(
-                manager, voices, in_sr, on_audio=lambda pcm: loop.call_soon_threadsafe(outbox.put_nowait, pcm))
+            session = BrowserRealtimeSession(manager, voices, in_sr, on_audio=on_audio,
+                                             out_sr=48000 if use_opus else None)
             outbox.put_nowait({"type": "loading"})
             await run_in_threadpool(session.start, cfg)  # charge les modèles (peut être long la 1re fois)
-            outbox.put_nowait({"type": "started", "out_sample_rate": session.out_sr})
+            outbox.put_nowait({"type": "started", "out_sample_rate": session.out_sr,
+                               "codec": "opus" if use_opus else "pcm"})
             tasks.append(asyncio.create_task(status_pump()))
             while True:
                 msg = await ws.receive()
                 if msg["type"] == "websocket.disconnect":
                     break
                 if msg.get("bytes"):
-                    pcm = np.frombuffer(msg["bytes"], dtype="<i2").astype(np.float32) / 32768.0
-                    session.feed(pcm)
+                    if decoder is not None:
+                        session.feed(decoder.decode(msg["bytes"]))
+                    else:
+                        session.feed(np.frombuffer(msg["bytes"], dtype="<i2").astype(np.float32) / 32768.0)
                 elif msg.get("text") == "stop":
                     break
+                elif msg.get("text"):
+                    await handle_control(session, json.loads(msg["text"]), outbox)
         except WebSocketDisconnect:
             pass
         except Exception as exc:  # erreur de config / modèle : on la renvoie au navigateur

@@ -266,3 +266,11 @@ input[type=range] { padding: 0; accent-color: var(--accent); background: none; b
 .compare-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
 .compare-grid .cmp { margin: 0; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
 .compare-grid audio { width: 100%; }
+.say-box { margin-top: 16px; background: var(--panel-2); border-radius: var(--radius); padding: 12px 14px; }
+.say-box .badges button { cursor: pointer; }
+.fav-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 99px; padding: 3px 4px 3px 10px; font-size: 13px; }
+.fav-chip button { all: unset; cursor: pointer; padding: 0 6px; color: var(--muted); }
+.fav-chip button:hover { color: var(--text); }
+#live-mic-state.on { color: var(--accent-2); border-color: #20c99755; }
+#live-mic-state.off { color: var(--danger); border-color: #ef5d5d55; }

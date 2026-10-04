@@ -20,11 +20,11 @@ Légende : effort **S** (quelques heures) · **M** (une journée) · **L** (plus
 ## Lot 2 — Live / Discord (S-M)
 | # | Tâche | Effort | État |
 |---|---|---|---|
-| 2.1 | Texte → Discord dans le Live + phrases favorites | S | ☐ |
-| 2.2 | Appuyer pour parler / raccourci muet + porte de bruit navigateur | S | ☐ |
-| 2.3 | Reconnexion automatique du Live | S | ☐ |
-| 2.4 | Latence : recouvrement + alignement des morceaux, préchauffage, affichage de la latence réelle | M | ☐ |
-| 2.5 | Compression Opus du flux (WebCodecs ↔ PyAV), repli PCM automatique | M | ☐ |
+| 2.1 | Texte → Discord dans le Live + phrases favorites | S | ☑ |
+| 2.2 | Appuyer pour parler / raccourci muet + porte de bruit navigateur | S | ☑ |
+| 2.3 | Reconnexion automatique du Live | S | ☑ |
+| 2.4 | Latence : recouvrement + alignement des morceaux, préchauffage, affichage de la latence réelle | M | ⚠ |
+| 2.5 | Compression Opus du flux (WebCodecs ↔ PyAV), repli PCM automatique | M | ☑ |
 
 ## Lot 3 — Robustesse et exploitation (S-M)
 | # | Tâche | Effort | État |
