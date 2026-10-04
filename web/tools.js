@@ -50,6 +50,8 @@ async function loadSettings() {
   $("#set-max").value = s.max_loaded_models;
   $("#set-auto").checked = s.auto_unload;
   $("#set-wm").checked = s.watermark;
+  $("#set-applio").value = s.applio_dir || "";
+  $("#set-applio-py").value = s.applio_python || "";
   const py = s.engine_python || {};
   $("#set-python").innerHTML = models.filter((m) => !m.id.startsWith("fake")).map((m) => `<label class="field">${esc(m.name)}
       <input data-py="${m.id}" value="${esc(py[m.id] || "")}" placeholder="(Python du serveur)"></label>`).join("");
@@ -99,7 +101,8 @@ $("#set-save").addEventListener("click", (e) => busy(e.currentTarget, "Enregistr
   try {
     await api("/api/settings", { method: "PATCH", json: {
       max_loaded_models: parseInt($("#set-max").value || "0", 10), auto_unload: $("#set-auto").checked,
-      watermark: $("#set-wm").checked, engine_python } });
+      watermark: $("#set-wm").checked, engine_python,
+      applio_dir: $("#set-applio").value.trim(), applio_python: $("#set-applio-py").value.trim() } });
     toast("Réglages enregistrés (le Python par modèle s'applique au prochain chargement).", "ok");
   } catch (err) { toast(err.message, "error"); }
 }));

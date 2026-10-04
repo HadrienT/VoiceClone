@@ -21,6 +21,9 @@ DEFAULTS = {
     "watermark": os.environ.get("VOICECLONE_WATERMARK", "0") == "1",
     # Python à utiliser par modèle (isolation) : {"model_id": "/chemin/vers/venv/bin/python"}
     "engine_python": {},
+    # Entraînement RVC : dossier d'Applio et son Python (vide = détection automatique)
+    "applio_dir": os.environ.get("VOICECLONE_APPLIO_DIR", ""),
+    "applio_python": os.environ.get("VOICECLONE_APPLIO_PYTHON", ""),
 }
 
 _lock = threading.Lock()

@@ -6,6 +6,7 @@ import { watchJob, jobProgressHtml, refreshJobsPanel } from "./jobs.js";
 import { renderSegments } from "./longtext.js";
 import { showTools } from "./tools.js";
 import { showBooks } from "./books.js";
+import { showTraining } from "./training.js";
 import { openTrimmer } from "./trim.js";
 
 const READ_PROMPTS = [
@@ -29,6 +30,7 @@ function showTab(tab) {
   if (tab === "live") { loadDevices(); pollLive(); }
   if (tab === "tools") showTools().catch((err) => toast(err.message, "error"));
   if (tab === "books") showBooks().catch((err) => toast(err.message, "error"));
+  if (tab === "training") showTraining().catch((err) => toast(err.message, "error"));
 }
 $$("#nav button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
 

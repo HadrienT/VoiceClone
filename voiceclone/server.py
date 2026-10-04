@@ -145,12 +145,35 @@ class SettingsUpdate(BaseModel):
     auto_unload: bool | None = None
     watermark: bool | None = None
     engine_python: dict[str, str] | None = None
+    applio_dir: str | None = None
+    applio_python: str | None = None
+
+
+class XTTSTrainRequest(BaseModel):
+    voice_id: str
+    epochs: int = Field(10, ge=1, le=200)
+    batch_size: int = Field(2, ge=1, le=32)
+    grad_accum: int = Field(4, ge=1, le=64)
+    asr_model_id: str | None = None
+    language: str | None = None
+    name: str | None = Field(None, max_length=100)
+
+
+class RVCTrainRequest(BaseModel):
+    voice_id: str
+    epochs: int = Field(200, ge=1, le=2000)
+    batch_size: int = Field(8, ge=1, le=64)
+    sample_rate: int = Field(40000)
+    save_every: int = Field(25, ge=1, le=500)
 
 
 # ------------------------------------------------------------------- app
 def create_app() -> FastAPI:
     config.ensure_dirs()
     logs.install()
+    from . import training
+
+    training.load_custom_models()  # modèles affinés localement (XTTS…)
     downloads = DownloadManager()
     manager = EngineManager(downloads)
     voices = VoiceStore()
@@ -666,6 +689,56 @@ def create_app() -> FastAPI:
                 pass
         books.delete(book_id)
         return {"ok": True}
+
+    # ------------------------------------------------------------ entraînement
+    @app.get("/api/training/models")
+    def trained_models():
+        return training.list_custom_models()
+
+    @app.delete("/api/training/models/{model_id}")
+    def delete_trained_model(model_id: str):
+        manager.unload(model_id)
+        training.delete_custom_model(model_id)
+        return {"ok": True}
+
+    @app.post("/api/training/xtts")
+    def train_xtts(body: XTTSTrainRequest):
+        """Affine XTTS v2 sur une voix (tâche de fond, plusieurs dizaines de minutes sur GPU)."""
+        voice = voices.get(body.voice_id)
+        return jobs.submit("train", f"🎓 XTTS · {voice.name}", lambda job: training.finetune_xtts(
+            job, manager, voices, body.voice_id, body.epochs, body.batch_size, body.grad_accum,
+            body.asr_model_id, body.language, body.name)).to_dict()
+
+    @app.post("/api/training/rvc")
+    def train_rvc(body: RVCTrainRequest):
+        """Entraîne un modèle RVC de la voix avec Applio (installé à part)."""
+        voice = voices.get(body.voice_id)
+        if body.sample_rate not in (32000, 40000, 48000):
+            raise HTTPException(400, "Fréquence : 32000, 40000 ou 48000.")
+        try:
+            training.applio_paths()
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return jobs.submit("train", f"🎓 RVC · {voice.name}", lambda job: training.train_rvc(
+            job, manager, voices, body.voice_id, body.epochs, body.batch_size, body.sample_rate,
+            body.save_every)).to_dict()
+
+    @app.post("/api/voices/{voice_id}/rvc")
+    async def upload_rvc(voice_id: str, pth: UploadFile = File(...), index: UploadFile | None = File(None),
+                         version: str = Form("v2")):
+        """Attache un modèle RVC existant (.pth et .index facultatif) à la voix."""
+        if not (pth.filename or "").lower().endswith(".pth"):
+            raise HTTPException(400, "Le modèle doit être un fichier .pth")
+        idx = await index.read() if index is not None and index.filename else None
+        try:
+            voice = training.attach_rvc(voices, voice_id, await pth.read(), idx, version, f"import : {pth.filename}")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return voice.to_dict()
+
+    @app.delete("/api/voices/{voice_id}/rvc")
+    def delete_rvc(voice_id: str):
+        return training.detach_rvc(voices, voice_id).to_dict()
 
     # ------------------------------------------------------------ filigrane
     @app.post("/api/watermark/detect")

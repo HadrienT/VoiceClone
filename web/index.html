@@ -24,6 +24,7 @@
       <button data-tab="s2s"><span>🔁</span> Voix → Voix</button>
       <button data-tab="live"><span>🔴</span> Live / Discord</button>
       <button data-tab="books"><span>📚</span> Livre audio</button>
+      <button data-tab="training"><span>🎓</span> Entraînement</button>
       <button data-tab="history"><span>🕘</span> Historique</button>
       <button data-tab="tools"><span>🩺</span> Diagnostic</button>
     </nav>
@@ -414,6 +415,58 @@
       <div id="book-library"></div>
     </section>
 
+    <section id="tab-training" class="tab">
+      <header class="page-head">
+        <h1>Entraînement</h1>
+        <p>Pour aller plus loin que le clonage instantané : un modèle <b>appris</b> sur votre voix. Demande un GPU,
+          plusieurs minutes de voix propre et du temps (de 20 min à quelques heures). Tout se passe en arrière-plan.</p>
+      </header>
+      <div class="card">
+        <div class="row">
+          <label class="field grow">Voix <select id="tr-voice"></select></label>
+          <label class="field grow">Transcrire les extraits manquants avec <select id="tr-asr"></select></label>
+        </div>
+        <p id="tr-info" class="muted" style="font-size:13px;margin:0"></p>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h3>🗣️ Affiner XTTS v2 sur cette voix</h3>
+          <p class="muted" style="font-size:13px">Le modèle obtenu apparaît dans la liste des modèles (« XTTS · votre voix ») :
+            timbre et accent plus fidèles qu'en zero-shot. Idéal : 5 à 30 min d'audio transcrit.</p>
+          <div class="row">
+            <label class="field">Époques <input type="number" id="xtts-epochs" value="10" min="1" max="200" style="width:90px"></label>
+            <label class="field">Lot <input type="number" id="xtts-batch" value="2" min="1" max="32" style="width:80px"></label>
+            <label class="field">Accumulation <input type="number" id="xtts-accum" value="4" min="1" max="64" style="width:80px"></label>
+          </div>
+          <div class="actions"><button class="btn primary" id="xtts-go">Lancer l'affinage ▶</button></div>
+          <div id="xtts-progress" class="result hidden"></div>
+        </div>
+        <div class="card">
+          <h3>🎛️ RVC : modèle de conversion de la voix</h3>
+          <p id="rvc-current"></p>
+          <details class="advanced" open><summary>Importer un modèle existant (.pth / .index)</summary>
+            <div class="row" style="align-items:flex-end">
+              <label class="field grow">Modèle (.pth) <input type="file" id="rvc-pth" accept=".pth"></label>
+              <label class="field grow">Index (.index, facultatif) <input type="file" id="rvc-index" accept=".index"></label>
+              <button class="btn" id="rvc-upload">Importer</button>
+            </div></details>
+          <details class="advanced"><summary>Entraîner avec Applio</summary>
+            <p class="muted" style="font-size:13px">Nécessite <a href="https://github.com/IAHispano/Applio" target="_blank" rel="noopener">Applio</a>
+              installé sur le serveur (son dossier se règle dans Diagnostic → Réglages). 10 min d'audio et 200-300 époques
+              donnent de bons résultats.</p>
+            <div class="row">
+              <label class="field">Époques <input type="number" id="rvc-epochs" value="200" min="1" max="2000" style="width:90px"></label>
+              <label class="field">Lot <input type="number" id="rvc-batch" value="8" min="1" max="64" style="width:80px"></label>
+              <label class="field">Fréquence <select id="rvc-sr"><option>32000</option><option selected>40000</option><option>48000</option></select></label>
+            </div>
+            <div class="actions"><button class="btn primary" id="rvc-go">Entraîner ▶</button></div>
+          </details>
+          <div id="rvc-progress" class="result hidden"></div>
+        </div>
+      </div>
+      <div class="card"><h3>Modèles entraînés</h3><div id="tr-models"></div></div>
+    </section>
+
     <section id="tab-tools" class="tab">
       <header class="page-head">
         <h1>Diagnostic</h1>
@@ -434,6 +487,9 @@
               pour faire tourner ce modèle dans un processus séparé, avec ses propres versions de torch/transformers.
               <code>python scripts/install.py --isolated &lt;modèle&gt;</code> le prépare automatiquement.</p>
             <div id="set-python" class="grid2"></div></details>
+          <details class="advanced"><summary>Entraînement RVC : Applio</summary>
+            <label class="field">Dossier d'Applio <input id="set-applio" placeholder="(data/repos/Applio)"></label>
+            <label class="field">Python d'Applio <input id="set-applio-py" placeholder="(détection : .venv / env dans le dossier)"></label></details>
           <div class="actions"><button class="btn primary" id="set-save">Enregistrer</button></div></div>
         <div class="card"><h3>🔎 Vérifier un filigrane</h3>
           <p class="muted" style="font-size:13px">Déposez un fichier audio pour savoir s'il a été généré par VoiceClone avec le filigrane activé.</p>

@@ -60,7 +60,7 @@ Légende : effort **S** (quelques heures) · **M** (une journée) · **L** (plus
 ## Lot 7 — Gros chantiers modèles (L)
 | # | Tâche | Effort | État |
 |---|---|---|---|
-| 7.1 | Seed-VC : conversion zero-shot temps réel de meilleure qualité | M | ☐ |
-| 7.2 | RVC : inférence de modèles .pth/.index + entraînement via Applio | L | ☐ |
-| 7.3 | Fine-tuning XTTS (jeu de données automatique, entraînement en tâche de fond, modèle fine-tuné sélectionnable) | L | ☐ |
+| 7.1 | Seed-VC : conversion zero-shot temps réel de meilleure qualité | M | ⚠ |
+| 7.2 | RVC : inférence de modèles .pth/.index + entraînement via Applio | L | ⚠ |
+| 7.3 | Fine-tuning XTTS (jeu de données automatique, entraînement en tâche de fond, modèle fine-tuné sélectionnable) | L | ⚠ |
 | 7.4 | Isolation des moteurs : un processus (et un Python/venv au choix) par modèle | L | ⚠ |
