@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import numpy as np
 
 from ..voices import Voice
-from .base import Engine, EngineError, split_text, to_numpy
+from .base import Engine, EngineError, read_audio_without_torchcodec, split_text, to_numpy
 
 LANG_ALIASES = {"zh": "zh-cn"}
 
@@ -16,7 +16,10 @@ class XTTSEngine(Engine):
     def load(self) -> None:
         import torch
         from TTS.tts.configs.xtts_config import XttsConfig
+        from TTS.tts.models import xtts as xtts_module
         from TTS.tts.models.xtts import Xtts
+
+        read_audio_without_torchcodec(xtts_module)  # lecture de la référence via soundfile
 
         cfg = XttsConfig()
         cfg.load_json(str(self.model_dir / "config.json"))

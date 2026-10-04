@@ -86,3 +86,35 @@ def split_text(text: str, max_chars: int = 240) -> list[str]:
     if cur:
         chunks.append(cur)
     return [c for c in chunks if c]
+
+
+class _TorchaudioWithoutCodec:
+    """Remplaçant de `torchaudio` dont seul `load` change : lecture via soundfile.
+
+    Depuis PyTorch 2.9, `torchaudio.load` passe obligatoirement par torchcodec, dont les
+    binaires doivent correspondre exactement à la version CUDA de torch (sinon :
+    « libnvrtc.so.13: cannot open shared object file »). Nos références sont des WAV que
+    soundfile lit très bien : on évite ainsi torchcodec pour l'audio de référence.
+    Tout le reste (transforms, functional…) est délégué au vrai torchaudio.
+    """
+
+    def __init__(self, real) -> None:
+        self._real = real
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    @staticmethod
+    def load(path, *args, **kwargs):
+        import soundfile as sf
+        import torch
+
+        x, sr = sf.read(str(path), dtype="float32", always_2d=True)
+        return torch.from_numpy(np.ascontiguousarray(x.T)), sr
+
+
+def read_audio_without_torchcodec(module) -> None:
+    """Fait lire l'audio de `module` (qui a fait `import torchaudio`) sans torchcodec."""
+    current = getattr(module, "torchaudio", None)
+    if current is not None and not isinstance(current, _TorchaudioWithoutCodec):
+        module.torchaudio = _TorchaudioWithoutCodec(current)
