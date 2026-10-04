@@ -930,6 +930,13 @@ function liveSettings() {
   };
 }
 
+/** Libellé et couleur du bouton selon l'état réel (busy() remet l'ancien libellé à la fin du clic). */
+function syncLiveButton() {
+  const btn = $("#live-toggle");
+  btn.textContent = state.liveRunning ? "■ Arrêter" : "▶ Démarrer";
+  btn.classList.toggle("running", state.liveRunning);
+}
+
 $("#live-toggle").addEventListener("click", (e) => busy(e.currentTarget, state.liveRunning ? "Arrêt…" : "Démarrage…", async () => {
   try {
     if (state.liveWhere === "browser") {
@@ -963,17 +970,13 @@ $("#live-toggle").addEventListener("click", (e) => busy(e.currentTarget, state.l
     if (state.liveWhere === "browser") renderLiveStatus({ state: "error", error: err.message });
   }
   if (state.liveWhere === "server") pollLive(true);
-}));
+}).then(syncLiveButton));
 
 const dbToPct = (db) => Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
 
 function renderLiveStatus(s) {
   state.liveRunning = s.state === "running" || s.state === "starting";
-  const btn = $("#live-toggle");
-  if (!btn.disabled) {
-    btn.textContent = state.liveRunning ? "■ Arrêter" : "▶ Démarrer";
-    btn.classList.toggle("running", state.liveRunning);
-  }
+  if (!$("#live-toggle").disabled) syncLiveButton(); // pendant un clic, c'est la fin du clic qui le met à jour
   const names = { idle: "arrêté", starting: "démarrage…", running: "en direct 🔴", error: "erreur" };
   $("#live-state").textContent = names[s.state] || s.state;
   $("#live-in-meter").style.width = `${dbToPct(s.input_db ?? -120)}%`;

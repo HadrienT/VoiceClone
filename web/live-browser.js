@@ -92,6 +92,7 @@ export class BrowserLive {
     const started = new Promise((resolve, reject) => {
       this.ws.onopen = () => this.ws.send(JSON.stringify({ ...config, sample_rate: this.capCtx.sampleRate }));
       this.ws.onmessage = (e) => {
+        if (this.stopping) return; // derniers messages en vol après « Arrêter » : ignorés
         if (typeof e.data !== "string") return this._play(e.data);
         const msg = JSON.parse(e.data);
         if (msg.type === "started") { this.outRate = msg.out_sample_rate; this.running = true; resolve(); }
