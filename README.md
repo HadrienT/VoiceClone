@@ -4,6 +4,8 @@ A local voice cloning studio built on open-source models, with a web interface.
 It runs on your own machine: models come from Hugging Face, and audio stays on
 the server.
 
+**[How it works: interactive map](https://hadrient.github.io/atlas-pages/VoiceClone/)**
+
 ![Python 3.10-3.11](https://img.shields.io/badge/Python-3.10--3.11-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![CUDA](https://img.shields.io/badge/NVIDIA-CUDA-76B900?logo=nvidia&logoColor=white)
